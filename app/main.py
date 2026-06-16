@@ -21,6 +21,7 @@ from app.pipeline import (
     DEFAULT_MODEL,
     DEVICE,
     format_timestamp,
+    get_canonical_models,
     load_whisper_model,
     resolve_model_name,
     run_pipeline,
@@ -134,9 +135,19 @@ async def transcribe_audio(
             output_format = output
 
         # Map OpenAI-style aliases (whisper-tiny, whisper-large-v3, whisper-1, ...)
-        # to canonical faster-whisper names so /asr accepts the same identifiers
+        # to canonical MLX model names so /asr accepts the same identifiers
         # advertised by /v1/models.
         model = resolve_model_name(model)
+
+        # Validate resolved model against the MLX canonical list.
+        # Unknown names would cause whispermlx.load_model to fail with an
+        # opaque error; surface a clean 400 instead.
+        canonical_models = set(get_canonical_models())
+        if model not in canonical_models:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown model: {model}. Supported models: {', '.join(sorted(canonical_models))}",
+            )
 
         # Resolve diarization toggle
         if diarize is not None or enable_diarization is not None:
@@ -194,8 +205,11 @@ async def transcribe_audio(
 
         # Format output based on requested format
         if output_format == "json":
+            # text is a joined string of all segment texts (proper transcript),
+            # while segments provides the structured array with start/end/text.
+            joined_text = " ".join(seg.get("text", "") for seg in result.get("segments", []))
             response_data = {
-                "text": result.get("segments", []),
+                "text": joined_text,
                 "language": detected_language,
                 "segments": result.get("segments", []),
                 "word_segments": result.get("word_segments", []),
@@ -324,4 +338,4 @@ app.include_router(models_router)
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=9000)
+    uvicorn.run(app, host="0.0.0.0", port=9001)
