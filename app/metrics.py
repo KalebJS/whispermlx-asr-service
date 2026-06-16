@@ -1,14 +1,13 @@
-"""Prometheus metric definitions and helpers, shared by main.py and serve_app.py."""
+"""Prometheus metric definitions and helpers, shared by main.py."""
 
 from prometheus_client import (
+    CONTENT_TYPE_LATEST,
     Counter,
     Gauge,
     Histogram,
     Info,
-    CONTENT_TYPE_LATEST,
     generate_latest,
 )
-import torch
 
 REQUESTS_TOTAL = Counter(
     "whisperx_requests_total",
@@ -52,13 +51,16 @@ SERVICE_INFO = Info("whisperx_service", "Static service identity")
 
 
 def refresh_vram():
+    """Report MLX active memory (or 0) instead of CUDA VRAM."""
     try:
-        if torch.cuda.is_available():
-            VRAM_ALLOCATED_BYTES.set(torch.cuda.memory_allocated())
+        import mlx.core
+
+        if hasattr(mlx.core, "get_active_memory"):
+            VRAM_ALLOCATED_BYTES.set(mlx.core.get_active_memory())
         else:
             VRAM_ALLOCATED_BYTES.set(0)
     except Exception:
-        pass
+        VRAM_ALLOCATED_BYTES.set(0)
 
 
 def render():

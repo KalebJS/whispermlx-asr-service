@@ -5,39 +5,36 @@ POST /v1/audio/translations
 GET /v1/models
 """
 
+import logging
 import os
 import tempfile
-import logging
-import time
-from typing import Optional, List, Union
 from pathlib import Path
 
-from fastapi import APIRouter, File, UploadFile, Form, HTTPException, Request
+import whispermlx
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse
-import whisperx
 
-from app.schemas import (
-    ResponseFormat,
-    TranscriptionWord,
-    TranscriptionSegment,
-    TranscriptionVerboseJsonResponse,
-    OpenAIErrorDetail,
-    OpenAIErrorResponse,
-)
 from app.pipeline import (
-    DEVICE,
-    BATCH_SIZE,
-    CACHE_DIR,
     DEFAULT_MODEL,
-    load_whisper_model,
-    clear_gpu_memory,
     format_timestamp,
     get_canonical_models,
-    transcribe as pipeline_transcribe,
+    resolve_model_name,
+)
+from app.pipeline import (
     align as pipeline_align,
-    _whisper_models as loaded_models,
+)
+from app.pipeline import (
+    transcribe as pipeline_transcribe,
 )
 from app.queue import run_in_queue
+from app.schemas import (
+    OpenAIErrorDetail,
+    OpenAIErrorResponse,
+    ResponseFormat,
+    TranscriptionSegment,
+    TranscriptionVerboseJsonResponse,
+    TranscriptionWord,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +43,7 @@ MAX_FILE_SIZE_MB = int(os.getenv("MAX_FILE_SIZE_MB", "1000"))
 router = APIRouter(prefix="/v1/audio", tags=["OpenAI Compatible"])
 models_router = APIRouter(prefix="/v1", tags=["OpenAI Compatible"])
 
-# Model mapping: OpenAI model names to WhisperX model names
+# Model mapping: OpenAI model names to MLX model names
 MODEL_MAPPING = {
     "whisper-1": os.getenv("OPENAI_WHISPER1_MODEL", DEFAULT_MODEL),
     "whisper-large-v3": "large-v3",
@@ -62,54 +59,40 @@ def create_openai_error(
     status_code: int,
     message: str,
     error_type: str = "invalid_request_error",
-    param: Optional[str] = None,
-    code: Optional[str] = None
+    param: str | None = None,
+    code: str | None = None,
 ) -> JSONResponse:
     """Create OpenAI-compatible error response"""
     error_response = OpenAIErrorResponse(
-        error=OpenAIErrorDetail(
-            message=message,
-            type=error_type,
-            param=param,
-            code=code
-        )
+        error=OpenAIErrorDetail(message=message, type=error_type, param=param, code=code)
     )
-    return JSONResponse(
-        status_code=status_code,
-        content=error_response.model_dump()
-    )
+    return JSONResponse(status_code=status_code, content=error_response.model_dump())
 
 
 def format_verbose_json_response(
-    result: dict,
-    task: str,
-    language: str,
-    duration: float,
-    include_words: bool,
-    include_segments: bool
+    result: dict, task: str, language: str, duration: float, include_words: bool, include_segments: bool
 ) -> TranscriptionVerboseJsonResponse:
     """Format WhisperX result as OpenAI verbose_json response"""
 
-    full_text = " ".join([
-        seg.get("text", "").strip()
-        for seg in result.get("segments", [])
-    ]).strip()
+    full_text = " ".join([seg.get("text", "").strip() for seg in result.get("segments", [])]).strip()
 
     segments = []
     if include_segments:
         for idx, seg in enumerate(result.get("segments", [])):
-            segments.append(TranscriptionSegment(
-                id=idx,
-                seek=int(seg.get("start", 0) * 100),
-                start=seg.get("start", 0.0),
-                end=seg.get("end", 0.0),
-                text=seg.get("text", "").strip(),
-                tokens=[],
-                temperature=0.0,
-                avg_logprob=0.0,
-                compression_ratio=0.0,
-                no_speech_prob=0.0
-            ))
+            segments.append(
+                TranscriptionSegment(
+                    id=idx,
+                    seek=int(seg.get("start", 0) * 100),
+                    start=seg.get("start", 0.0),
+                    end=seg.get("end", 0.0),
+                    text=seg.get("text", "").strip(),
+                    tokens=[],
+                    temperature=0.0,
+                    avg_logprob=0.0,
+                    compression_ratio=0.0,
+                    no_speech_prob=0.0,
+                )
+            )
 
     words = None
     if include_words:
@@ -121,19 +104,14 @@ def format_verbose_json_response(
 
         for word_data in word_segments:
             if "word" in word_data and "start" in word_data and "end" in word_data:
-                words.append(TranscriptionWord(
-                    word=word_data["word"].strip(),
-                    start=word_data.get("start", 0.0),
-                    end=word_data.get("end", 0.0)
-                ))
+                words.append(
+                    TranscriptionWord(
+                        word=word_data["word"].strip(), start=word_data.get("start", 0.0), end=word_data.get("end", 0.0)
+                    )
+                )
 
     return TranscriptionVerboseJsonResponse(
-        task=task,
-        language=language,
-        duration=duration,
-        text=full_text,
-        segments=segments,
-        words=words
+        task=task, language=language, duration=duration, text=full_text, segments=segments, words=words
     )
 
 
@@ -152,8 +130,8 @@ def format_vtt_response(result: dict) -> str:
     """Format WhisperX result as WebVTT subtitle format"""
     vtt_content = ["WEBVTT\n"]
     for segment in result.get("segments", []):
-        start_time = format_timestamp(segment.get("start", 0)).replace(',', '.')
-        end_time = format_timestamp(segment.get("end", 0)).replace(',', '.')
+        start_time = format_timestamp(segment.get("start", 0)).replace(",", ".")
+        end_time = format_timestamp(segment.get("end", 0)).replace(",", ".")
         text = segment.get("text", "").strip()
         vtt_content.append(f"{start_time} --> {end_time}\n{text}\n")
     return "\n".join(vtt_content)
@@ -162,18 +140,20 @@ def format_vtt_response(result: dict) -> str:
 def _run_transcribe_and_align(
     audio,
     whisperx_model: str,
-    language: Optional[str],
+    language: str | None,
     task: str,
     need_word_timestamps: bool,
-    hotwords: Optional[str] = None,
+    hotwords: str | None = None,
+    initial_prompt: str | None = None,
 ):
-    """Blocking helper that runs transcription + optional alignment on GPU."""
+    """Blocking helper that runs transcription + optional alignment."""
     result = pipeline_transcribe(
         audio,
         model_name=whisperx_model,
         language=language,
         task=task,
         hotwords=hotwords,
+        initial_prompt=initial_prompt,
     )
     if need_word_timestamps:
         result = pipeline_align(audio, result)
@@ -183,47 +163,40 @@ def _run_transcribe_and_align(
 async def process_audio(
     file: UploadFile,
     model: str,
-    language: Optional[str],
-    prompt: Optional[str],
+    language: str | None,
+    prompt: str | None,
     response_format: ResponseFormat,
     temperature: float,
-    timestamp_granularities: List[str],
+    timestamp_granularities: list[str],
     task: str = "transcribe",
-    hotwords: Optional[str] = None,
-) -> Union[JSONResponse, PlainTextResponse]:
+    hotwords: str | None = None,
+) -> JSONResponse | PlainTextResponse:
     """
     Core audio processing function shared by transcriptions and translations endpoints
     """
     temp_audio_path = None
 
     try:
-        # Validate model
-        whisperx_model = MODEL_MAPPING.get(model)
-        if not whisperx_model:
-            if model in ["tiny", "base", "small", "medium", "large-v2", "large-v3"]:
-                whisperx_model = model
-            else:
-                return create_openai_error(
-                    400,
-                    f"Invalid model: {model}. Supported: whisper-1, or whisperx models (tiny, base, small, medium, large-v2, large-v3)",
-                    param="model"
-                )
+        # Validate model using resolve_model_name (handles aliases + MLX canonical names)
+        resolved_model = resolve_model_name(model)
+        canonical_models = set(get_canonical_models())
+        if resolved_model not in canonical_models and model not in MODEL_MAPPING:
+            return create_openai_error(
+                400,
+                f"Invalid model: {model}. Supported: whisper-1, or MLX models ({', '.join(sorted(canonical_models))})",
+                param="model",
+            )
+        whisperx_model = resolved_model
 
         # Validate timestamp_granularities requires verbose_json
         if timestamp_granularities and response_format != ResponseFormat.VERBOSE_JSON:
             return create_openai_error(
-                400,
-                "timestamp_granularities requires response_format='verbose_json'",
-                param="timestamp_granularities"
+                400, "timestamp_granularities requires response_format='verbose_json'", param="timestamp_granularities"
             )
 
         # Validate temperature range
         if temperature < 0 or temperature > 1:
-            return create_openai_error(
-                400,
-                "temperature must be between 0 and 1",
-                param="temperature"
-            )
+            return create_openai_error(400, "temperature must be between 0 and 1", param="temperature")
 
         # Save uploaded file to temporary location
         suffix = Path(file.filename).suffix if file.filename else ".wav"
@@ -236,21 +209,18 @@ async def process_audio(
         file_size_mb = len(content) / (1024 * 1024)
         if file_size_mb > MAX_FILE_SIZE_MB:
             return create_openai_error(
-                413,
-                f"File too large ({file_size_mb:.1f}MB). Maximum: {MAX_FILE_SIZE_MB}MB",
-                code="file_too_large"
+                413, f"File too large ({file_size_mb:.1f}MB). Maximum: {MAX_FILE_SIZE_MB}MB", code="file_too_large"
             )
 
-        logger.info(f"OpenAI-compat: Processing {file.filename} ({file_size_mb:.1f}MB), model: {whisperx_model}, task: {task}")
+        logger.info(
+            f"OpenAI-compat: Processing {file.filename} ({file_size_mb:.1f}MB), model: {whisperx_model}, task: {task}"
+        )
 
         # Load audio
-        audio = whisperx.load_audio(temp_audio_path)
-        duration = len(audio) / 16000  # WhisperX loads at 16kHz
+        audio = whispermlx.load_audio(temp_audio_path)
+        duration = len(audio) / 16000  # whispermlx loads at 16kHz
 
-        need_word_timestamps = (
-            response_format == ResponseFormat.VERBOSE_JSON and
-            "word" in timestamp_granularities
-        )
+        need_word_timestamps = response_format == ResponseFormat.VERBOSE_JSON and "word" in timestamp_granularities
 
         # Run through the async queue
         result = await run_in_queue(
@@ -260,24 +230,19 @@ async def process_audio(
             language,
             task,
             need_word_timestamps,
-            hotwords=hotwords or prompt,
+            hotwords=hotwords,
+            initial_prompt=prompt,
         )
 
         detected_language = result.get("language", language or "en")
 
         # Format response based on requested format
         if response_format == ResponseFormat.JSON:
-            full_text = " ".join([
-                seg.get("text", "").strip()
-                for seg in result.get("segments", [])
-            ]).strip()
+            full_text = " ".join([seg.get("text", "").strip() for seg in result.get("segments", [])]).strip()
             return JSONResponse(content={"text": full_text})
 
         elif response_format == ResponseFormat.TEXT:
-            full_text = " ".join([
-                seg.get("text", "").strip()
-                for seg in result.get("segments", [])
-            ]).strip()
+            full_text = " ".join([seg.get("text", "").strip() for seg in result.get("segments", [])]).strip()
             return PlainTextResponse(content=full_text)
 
         elif response_format == ResponseFormat.SRT:
@@ -298,7 +263,7 @@ async def process_audio(
                 language=detected_language,
                 duration=duration,
                 include_words=include_words,
-                include_segments=include_segments
+                include_segments=include_segments,
             )
             return JSONResponse(content=response.model_dump(exclude_none=True))
 
@@ -309,11 +274,7 @@ async def process_audio(
 
     except Exception as e:
         logger.error(f"OpenAI-compat error: {str(e)}", exc_info=True)
-        return create_openai_error(
-            500,
-            f"Internal server error: {str(e)}",
-            error_type="server_error"
-        )
+        return create_openai_error(500, f"Internal server error: {str(e)}", error_type="server_error")
 
     finally:
         if temp_audio_path and os.path.exists(temp_audio_path):
@@ -328,12 +289,11 @@ async def create_transcription(
     request: Request,
     file: UploadFile = File(..., description="Audio file to transcribe"),
     model: str = Form(..., description="Model ID (whisper-1, large-v3, etc.)"),
-    language: Optional[str] = Form(None, description="ISO-639-1 language code"),
-    prompt: Optional[str] = Form(None, description="Guidance text/context"),
-    hotwords: Optional[str] = Form(None, description="Hotwords/phrases to bias transcription"),
+    language: str | None = Form(None, description="ISO-639-1 language code"),
+    prompt: str | None = Form(None, description="Guidance text/context"),
+    hotwords: str | None = Form(None, description="Hotwords/phrases to bias transcription"),
     response_format: ResponseFormat = Form(
-        ResponseFormat.JSON,
-        description="Output format: json, text, srt, verbose_json, vtt"
+        ResponseFormat.JSON, description="Output format: json, text, srt, verbose_json, vtt"
     ),
     temperature: float = Form(0.0, ge=0.0, le=1.0, description="Sampling temperature"),
 ):
@@ -368,11 +328,10 @@ async def create_translation(
     request: Request,
     file: UploadFile = File(..., description="Audio file to translate"),
     model: str = Form(..., description="Model ID (whisper-1, large-v3, etc.)"),
-    prompt: Optional[str] = Form(None, description="Guidance text/context"),
-    hotwords: Optional[str] = Form(None, description="Hotwords/phrases to bias transcription"),
+    prompt: str | None = Form(None, description="Guidance text/context"),
+    hotwords: str | None = Form(None, description="Hotwords/phrases to bias transcription"),
     response_format: ResponseFormat = Form(
-        ResponseFormat.JSON,
-        description="Output format: json, text, srt, verbose_json, vtt"
+        ResponseFormat.JSON, description="Output format: json, text, srt, verbose_json, vtt"
     ),
     temperature: float = Form(0.0, ge=0.0, le=1.0, description="Sampling temperature"),
 ):
@@ -402,12 +361,12 @@ async def create_translation(
     )
 
 
-# Available whisper models. Built from faster_whisper.available_models() so
-# this list stays in sync with whatever engine version is installed.
+# Available whisper models. Built from the MLX model map so this list
+# stays in sync with whatever the whispermlx backend supports.
 def _build_available_models():
     models = [{"id": "whisper-1", "object": "model", "owned_by": "openai"}]
     for name in get_canonical_models():
-        models.append({"id": name, "object": "model", "owned_by": "whisperx"})
+        models.append({"id": name, "object": "model", "owned_by": "whispermlx"})
     return models
 
 
@@ -421,10 +380,7 @@ async def list_models():
 
     OpenAI-compatible endpoint: GET /v1/models
     """
-    return {
-        "object": "list",
-        "data": AVAILABLE_MODELS
-    }
+    return {"object": "list", "data": AVAILABLE_MODELS}
 
 
 @models_router.get("/models/{model_id}")
@@ -439,8 +395,5 @@ async def get_model(model_id: str):
             return model
 
     return create_openai_error(
-        404,
-        f"Model '{model_id}' not found",
-        error_type="invalid_request_error",
-        code="model_not_found"
+        404, f"Model '{model_id}' not found", error_type="invalid_request_error", code="model_not_found"
     )

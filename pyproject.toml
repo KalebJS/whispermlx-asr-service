@@ -43,6 +43,9 @@ select = [
 ]
 ignore = [
     "E501",  # line length handled by formatter
+    "B008",  # FastAPI requires File()/Form() calls in argument defaults
+    "B904",  # raise ... from err/None — acceptable in HTTP error handlers
+    "E402",  # module-level import not at top — intentional for filterwarnings + circular imports
 ]
 
 [tool.ruff.format]

@@ -1,37 +1,37 @@
 """
 Shared ASR pipeline stage functions.
 
-Extracts the 3-stage WhisperX pipeline (transcribe -> align -> diarize) into
-reusable functions consumed by both the legacy FastAPI endpoints and the
-Ray Serve deployments.
+Extracts the 3-stage pipeline (transcribe -> align -> diarize) into
+reusable functions consumed by the FastAPI endpoints.
+Powered by whispermlx (MLX backend on Apple Silicon).
 """
 
-import os
 import gc
-import math
-import time
 import logging
+import math
+import os
 import threading
+import time
 import warnings
-from typing import Optional, Dict, Any, Tuple
+from typing import Any
 
-# Suppress pyannote's torchcodec warning -- we decode audio via whisperx.load_audio (ffmpeg),
+# Suppress pyannote's torchcodec warning -- we decode audio via whispermlx.load_audio (ffmpeg),
 # not pyannote's built-in decoder, so the missing torchcodec is irrelevant.
 warnings.filterwarnings("ignore", message=".*torchcodec.*")
 
 import numpy as np
-import torch
-import whisperx
-from whisperx.diarize import DiarizationPipeline
+import whispermlx
+from whispermlx.diarize import DiarizationPipeline
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Configuration (read once at import time, same as before)
 # ---------------------------------------------------------------------------
-DEVICE = os.getenv("DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
-COMPUTE_TYPE = os.getenv("COMPUTE_TYPE", "float16" if DEVICE == "cuda" else "int8")
-BATCH_SIZE = int(os.getenv("BATCH_SIZE", "16" if DEVICE == "cuda" else "2"))
+DEVICE = os.getenv("DEVICE", "cpu")
+# COMPUTE_TYPE and BATCH_SIZE are accepted for API compatibility but ignored by MLX.
+COMPUTE_TYPE = os.getenv("COMPUTE_TYPE", "int8")
+BATCH_SIZE = int(os.getenv("BATCH_SIZE", "2"))
 HF_TOKEN = os.getenv("HF_TOKEN", None)
 CACHE_DIR = os.getenv("CACHE_DIR", "/.cache")
 DEFAULT_MODEL = os.getenv("PRELOAD_MODEL", "large-v3")
@@ -40,33 +40,40 @@ DEFAULT_MODEL = os.getenv("PRELOAD_MODEL", "large-v3")
 # models that have not been used in that many seconds. Floor of 30s on the
 # sweep interval to avoid pegging a thread on tight loops.
 MODEL_KEEP_ALIVE_SECONDS = int(os.getenv("MODEL_KEEP_ALIVE_SECONDS", "0"))
-MODEL_EVICTION_INTERVAL_SECONDS = max(
-    30, int(os.getenv("MODEL_EVICTION_INTERVAL_SECONDS", "60"))
-)
+MODEL_EVICTION_INTERVAL_SECONDS = max(30, int(os.getenv("MODEL_EVICTION_INTERVAL_SECONDS", "60")))
+
+# MLX model map: short names → HuggingFace repo IDs for the MLX backend.
+# Sourced from whispermlx.asr.MLX_MODEL_MAP. Duplicated here so that
+# get_canonical_models() and resolve_model_name() work without importing
+# faster_whisper. Keep in sync with the upstream whispermlx package.
+MLX_MODEL_MAP = {
+    "tiny": "mlx-community/whisper-tiny-mlx",
+    "tiny.en": "mlx-community/whisper-tiny.en-mlx",
+    "base": "mlx-community/whisper-base-mlx",
+    "base.en": "mlx-community/whisper-base.en-mlx",
+    "small": "mlx-community/whisper-small-mlx",
+    "small.en": "mlx-community/whisper-small.en-mlx",
+    "medium": "mlx-community/whisper-medium-mlx",
+    "medium.en": "mlx-community/whisper-medium.en-mlx",
+    "large": "mlx-community/whisper-large-mlx",
+    "large-v1": "mlx-community/whisper-large-mlx",
+    "large-v2": "mlx-community/whisper-large-v2-mlx",
+    "large-v3": "mlx-community/whisper-large-v3-mlx",
+    "large-v3-turbo": "mlx-community/whisper-large-v3-turbo",
+    "turbo": "mlx-community/whisper-large-v3-turbo",
+}
 
 
 def get_canonical_models() -> list:
     """
-    Canonical model names accepted by the underlying faster-whisper engine.
+    Canonical model names accepted by the whispermlx MLX backend.
 
-    Sourced from faster_whisper.available_models() so this list stays in sync
-    with whatever version of faster-whisper is installed, instead of being
-    hardcoded here.
+    Sourced from the MLX model map keys.
     """
-    try:
-        from faster_whisper import available_models
-        return list(available_models())
-    except Exception:
-        # Defensive fallback if the import surface ever changes upstream.
-        return [
-            "tiny.en", "tiny", "base.en", "base", "small.en", "small",
-            "medium.en", "medium", "large-v1", "large-v2", "large-v3", "large",
-            "distil-large-v2", "distil-medium.en", "distil-small.en",
-            "distil-large-v3", "distil-large-v3.5", "large-v3-turbo", "turbo",
-        ]
+    return list(MLX_MODEL_MAP.keys())
 
 
-# OpenAI-style aliases → canonical faster-whisper names. These are kept for
+# OpenAI-style aliases → canonical MLX model names. These are kept for
 # backwards compatibility on the request path; new clients should use the
 # canonical names returned by /v1/models.
 _MODEL_ALIASES = {
@@ -82,12 +89,12 @@ _MODEL_ALIASES = {
 
 def resolve_model_name(model: str) -> str:
     """
-    Resolve a user-supplied model identifier to a canonical faster-whisper name.
+    Resolve a user-supplied model identifier to a canonical MLX model name.
 
-    Accepts canonical names (tiny, large-v3, distil-medium.en, ...) as-is and
-    maps OpenAI-style aliases (whisper-tiny, whisper-large-v3, ...) to their
-    canonical equivalents. Unknown values are returned unchanged so the engine
-    can produce its own validation error.
+    Accepts canonical names (tiny, large-v3, ...) as-is and maps OpenAI-style
+    aliases (whisper-tiny, whisper-large-v3, ...) to their canonical equivalents.
+    Unknown values are returned unchanged so the engine can produce its own
+    validation error.
     """
     if not model:
         return DEFAULT_MODEL
@@ -97,7 +104,7 @@ def resolve_model_name(model: str) -> str:
     if model in _MODEL_ALIASES:
         return _MODEL_ALIASES[model]
     if model.startswith("whisper-"):
-        stripped = model[len("whisper-"):]
+        stripped = model[len("whisper-") :]
         if stripped in canonical:
             return stripped
     return model
@@ -108,10 +115,10 @@ _model_load_lock = threading.Lock()
 # ---------------------------------------------------------------------------
 # Model caches
 # ---------------------------------------------------------------------------
-_whisper_models: Dict[str, Any] = {}
-_whisper_models_last_used: Dict[str, float] = {}
-_align_models: Dict[str, Tuple[Any, Any]] = {}
-_diarize_pipeline: Optional[DiarizationPipeline] = None
+_whisper_models: dict[str, Any] = {}
+_whisper_models_last_used: dict[str, float] = {}
+_align_models: dict[str, tuple[Any, Any]] = {}
+_diarize_pipeline: DiarizationPipeline | None = None
 
 _eviction_thread_lock = threading.Lock()
 _eviction_thread_started = False
@@ -121,27 +128,35 @@ _eviction_thread_started = False
 # GPU helpers
 # ---------------------------------------------------------------------------
 def clear_gpu_memory():
-    """Clear GPU memory cache to prevent VRAM buildup."""
-    if DEVICE == "cuda":
-        gc.collect()
-        torch.cuda.empty_cache()
-        logger.debug("GPU memory cache cleared")
+    """Clear GPU memory cache to prevent VRAM buildup.
+
+    Uses gc.collect() plus a guarded MLX cache clear.
+    MLX inference runs on the Metal GPU automatically; this releases
+    MLX-allocated buffers that are no longer referenced.
+    """
+    gc.collect()
+    try:
+        import mlx.core
+
+        if hasattr(mlx.core, "clear_cache"):
+            mlx.core.clear_cache()
+    except Exception:
+        pass
+    logger.debug("GPU memory cache cleared")
 
 
 # ---------------------------------------------------------------------------
 # Stage 0 -- model loading
 # ---------------------------------------------------------------------------
 def load_whisper_model(model_name: str):
-    """Load WhisperX model with caching (thread-safe)."""
+    """Load whispermlx model with caching (thread-safe)."""
     if model_name not in _whisper_models:
         with _model_load_lock:
             if model_name not in _whisper_models:
-                logger.info(f"Loading WhisperX model: {model_name}")
-                model = whisperx.load_model(
+                logger.info(f"Loading whispermlx model: {model_name}")
+                model = whispermlx.load_model(
                     model_name,
                     device=DEVICE,
-                    compute_type=COMPUTE_TYPE,
-                    download_root=CACHE_DIR,
                 )
                 _whisper_models[model_name] = model
                 logger.info(f"Model {model_name} loaded successfully")
@@ -150,6 +165,7 @@ def load_whisper_model(model_name: str):
                 # the model is loaded, instead of only after the first eviction.
                 try:
                     from app import metrics as prom_metrics
+
                     prom_metrics.MODEL_EVICTIONS_TOTAL.labels(model=model_name)
                 except Exception:
                     pass
@@ -166,9 +182,7 @@ def _ensure_eviction_thread():
     with _eviction_thread_lock:
         if _eviction_thread_started:
             return
-        t = threading.Thread(
-            target=_eviction_loop, daemon=True, name="model-evictor"
-        )
+        t = threading.Thread(target=_eviction_loop, daemon=True, name="model-evictor")
         t.start()
         _eviction_thread_started = True
         logger.info(
@@ -185,7 +199,8 @@ def _eviction_loop():
             continue
         now = time.time()
         candidates = [
-            name for name, last in list(_whisper_models_last_used.items())
+            name
+            for name, last in list(_whisper_models_last_used.items())
             if now - last > MODEL_KEEP_ALIVE_SECONDS and name in _whisper_models
         ]
         evicted_any = False
@@ -199,6 +214,7 @@ def _eviction_loop():
                     evicted_any = True
                     try:
                         from app import metrics as prom_metrics
+
                         prom_metrics.MODEL_EVICTIONS_TOTAL.labels(model=name).inc()
                     except Exception:
                         pass
@@ -212,7 +228,7 @@ def load_align_model(language_code: str):
         with _model_load_lock:
             if language_code not in _align_models:
                 logger.info(f"Loading alignment model for language: {language_code}")
-                model_a, metadata = whisperx.load_align_model(
+                model_a, metadata = whispermlx.load_align_model(
                     language_code=language_code,
                     device=DEVICE,
                     model_dir=CACHE_DIR,
@@ -231,8 +247,8 @@ def load_diarize_pipeline() -> DiarizationPipeline:
                 logger.info("Loading diarization pipeline: pyannote/speaker-diarization-community-1")
                 _diarize_pipeline = DiarizationPipeline(
                     model_name="pyannote/speaker-diarization-community-1",
-                    use_auth_token=HF_TOKEN,
-                    device=torch.device(DEVICE),
+                    token=HF_TOKEN,
+                    device=DEVICE,
                 )
                 logger.info("Diarization pipeline loaded")
     return _diarize_pipeline
@@ -244,35 +260,42 @@ def load_diarize_pipeline() -> DiarizationPipeline:
 def transcribe(
     audio: np.ndarray,
     model_name: str = DEFAULT_MODEL,
-    language: Optional[str] = None,
+    language: str | None = None,
     task: str = "transcribe",
-    initial_prompt: Optional[str] = None,
-    hotwords: Optional[str] = None,
+    initial_prompt: str | None = None,
+    hotwords: str | None = None,
 ) -> dict:
-    """Run WhisperX transcription and return raw result dict."""
+    """Run whispermlx transcription and return raw result dict.
+
+    hotwords: accepted for API compatibility but IGNORED by the MLX backend.
+              A warning is logged; no error is raised.
+    initial_prompt: set per-request on the shared cached model (reset in finally).
+    """
     whisper_model = load_whisper_model(model_name)
 
-    # Set per-request options on the model's transcription options.
-    # The model is cached/shared, so we must reset after transcription.
+    # Hotwords is a no-op: the MLX backend has no hotwords mechanism.
     if hotwords is not None:
-        whisper_model.options.hotwords = hotwords
-    if initial_prompt is not None:
-        whisper_model.options.initial_prompt = initial_prompt
+        logger.warning(
+            "The MLX backend ignores hotwords; the parameter is accepted for "
+            "API compatibility but has no effect on transcription."
+        )
 
-    transcribe_options: Dict[str, Any] = {
-        "batch_size": BATCH_SIZE,
-        "language": language,
-        "task": task,
-    }
+    # Set per-request initial_prompt on the shared cached model.
+    # Must reset in finally to avoid leaking into subsequent requests.
+    if initial_prompt is not None:
+        whisper_model.initial_prompt = initial_prompt
 
     logger.info("Starting transcription...")
     try:
-        result = whisper_model.transcribe(audio, **transcribe_options)
+        result = whisper_model.transcribe(
+            audio,
+            language=language,
+            task=task,
+        )
     finally:
-        if hotwords is not None:
-            whisper_model.options.hotwords = None
+        # Always reset initial_prompt to avoid leaking to next request
         if initial_prompt is not None:
-            whisper_model.options.initial_prompt = None
+            whisper_model.initial_prompt = None
 
     detected_language = result.get("language", language or "en")
     logger.info(f"Transcription complete. Detected language: {detected_language}")
@@ -290,7 +313,7 @@ def align(audio: np.ndarray, result: dict) -> dict:
     logger.info("Aligning timestamps...")
     try:
         model_a, metadata = load_align_model(detected_language)
-        result = whisperx.align(
+        result = whispermlx.align(
             result["segments"],
             model_a,
             metadata,
@@ -311,11 +334,11 @@ def align(audio: np.ndarray, result: dict) -> dict:
 def diarize(
     audio: np.ndarray,
     result: dict,
-    num_speakers: Optional[int] = None,
-    min_speakers: Optional[int] = None,
-    max_speakers: Optional[int] = None,
+    num_speakers: int | None = None,
+    min_speakers: int | None = None,
+    max_speakers: int | None = None,
     return_speaker_embeddings: bool = False,
-) -> Tuple[dict, Optional[dict]]:
+) -> tuple[dict, dict | None]:
     """
     Run pyannote speaker diarization and assign speakers to segments.
 
@@ -330,7 +353,7 @@ def diarize(
     try:
         diarize_model = load_diarize_pipeline()
 
-        diarize_params: Dict[str, Any] = {}
+        diarize_params: dict[str, Any] = {}
         if num_speakers is not None:
             diarize_params["num_speakers"] = num_speakers
             logger.info(f"Diarization with exact speaker count: {num_speakers}")
@@ -357,7 +380,7 @@ def diarize(
             diarize_segments = diarize_segments.exclusive_speaker_diarization
             logger.info("Using exclusive speaker diarization for better timestamp reconciliation")
 
-        result = whisperx.assign_word_speakers(diarize_segments, result)
+        result = whispermlx.assign_word_speakers(diarize_segments, result)
         logger.info("Speaker diarization complete")
         clear_gpu_memory()
     except Exception as e:
@@ -404,17 +427,17 @@ def format_timestamp(seconds: float) -> str:
 def run_pipeline(
     audio: np.ndarray,
     model_name: str = DEFAULT_MODEL,
-    language: Optional[str] = None,
+    language: str | None = None,
     task: str = "transcribe",
-    initial_prompt: Optional[str] = None,
-    hotwords: Optional[str] = None,
+    initial_prompt: str | None = None,
+    hotwords: str | None = None,
     word_timestamps: bool = True,
     should_diarize: bool = True,
-    num_speakers: Optional[int] = None,
-    min_speakers: Optional[int] = None,
-    max_speakers: Optional[int] = None,
+    num_speakers: int | None = None,
+    min_speakers: int | None = None,
+    max_speakers: int | None = None,
     return_speaker_embeddings: bool = False,
-) -> Tuple[dict, Optional[dict]]:
+) -> tuple[dict, dict | None]:
     """
     Run the full 3-stage pipeline: transcribe -> align -> diarize.
 

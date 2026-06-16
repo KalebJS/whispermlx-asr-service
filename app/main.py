@@ -3,44 +3,40 @@ WhisperX ASR API Service
 Compatible with openai-whisper-asr-webservice API endpoints
 """
 
-import os
-import time
-import tempfile
 import logging
+import os
+import tempfile
+import time
 import warnings
-from typing import Optional
 from pathlib import Path
 
-from fastapi import FastAPI, File, UploadFile, Query, HTTPException
+import whispermlx
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.responses import JSONResponse, Response
-import whisperx
 
-from app.version import __version__
+from app import metrics as prom_metrics
 from app.pipeline import (
-    DEVICE,
-    COMPUTE_TYPE,
     BATCH_SIZE,
-    HF_TOKEN,
+    COMPUTE_TYPE,
     DEFAULT_MODEL,
-    load_whisper_model,
-    clear_gpu_memory,
+    DEVICE,
     format_timestamp,
-    sanitize_float_values,
-    run_pipeline,
+    load_whisper_model,
     resolve_model_name,
+    run_pipeline,
+    sanitize_float_values,
+)
+from app.pipeline import (
     _whisper_models as loaded_models,
 )
-from app.queue import run_in_queue, get_queue_metrics
-from app import metrics as prom_metrics
+from app.queue import get_queue_metrics, run_in_queue
+from app.version import __version__
 
 # Suppress pyannote pooling warnings about degrees of freedom
 warnings.filterwarnings("ignore", message=".*degrees of freedom is <= 0.*")
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 MAX_FILE_SIZE_MB = int(os.getenv("MAX_FILE_SIZE_MB", "1000"))
@@ -50,10 +46,10 @@ SERVE_MODE = os.getenv("SERVE_MODE", "simple")
 app = FastAPI(
     title="WhisperX ASR API",
     description="Automatic Speech Recognition API with Speaker Diarization using WhisperX",
-    version=__version__
+    version=__version__,
 )
 
-logger.info(f"WhisperX ASR Service v{__version__} initialized on device: {DEVICE}")
+logger.info(f"Whispermlx ASR Service v{__version__} initialized on device: {DEVICE}")
 logger.info(f"Compute type: {COMPUTE_TYPE}, Batch size: {BATCH_SIZE}")
 logger.info(f"Default model: {DEFAULT_MODEL}, Serve mode: {SERVE_MODE}")
 
@@ -61,12 +57,14 @@ logger.info(f"Default model: {DEFAULT_MODEL}, Serve mode: {SERVE_MODE}")
 @app.on_event("startup")
 async def startup_event():
     """Preload models on startup"""
-    prom_metrics.SERVICE_INFO.info({
-        "version": __version__,
-        "device": DEVICE,
-        "compute_type": COMPUTE_TYPE,
-        "serve_mode": SERVE_MODE,
-    })
+    prom_metrics.SERVICE_INFO.info(
+        {
+            "version": __version__,
+            "device": DEVICE,
+            "compute_type": COMPUTE_TYPE,
+            "serve_mode": SERVE_MODE,
+        }
+    )
     preload_model = os.getenv("PRELOAD_MODEL", None)
     if preload_model:
         logger.info(f"Preloading model on startup: {preload_model}")
@@ -93,19 +91,19 @@ async def root():
 async def transcribe_audio(
     audio_file: UploadFile = File(...),
     task: str = Query("transcribe"),
-    language: Optional[str] = Query(None),
-    initial_prompt: Optional[str] = Query(None),
-    hotwords: Optional[str] = Query(None),
+    language: str | None = Query(None),
+    initial_prompt: str | None = Query(None),
+    hotwords: str | None = Query(None),
     word_timestamps: bool = Query(True),
     output_format: str = Query("json"),
-    output: Optional[str] = Query(None),
+    output: str | None = Query(None),
     model: str = Query(DEFAULT_MODEL),
-    num_speakers: Optional[int] = Query(None),
-    min_speakers: Optional[int] = Query(None),
-    max_speakers: Optional[int] = Query(None),
-    diarize: Optional[bool] = Query(None),
-    enable_diarization: Optional[bool] = Query(None),
-    return_speaker_embeddings: Optional[bool] = Query(None),
+    num_speakers: int | None = Query(None),
+    min_speakers: int | None = Query(None),
+    max_speakers: int | None = Query(None),
+    diarize: bool | None = Query(None),
+    enable_diarization: bool | None = Query(None),
+    return_speaker_embeddings: bool | None = Query(None),
 ):
     """
     Main ASR endpoint compatible with openai-whisper-asr-webservice
@@ -161,16 +159,18 @@ async def transcribe_audio(
             raise HTTPException(
                 status_code=413,
                 detail=f"File too large ({file_size_mb:.1f}MB). Maximum allowed: {MAX_FILE_SIZE_MB}MB. "
-                       f"Large files may cause out-of-memory errors."
+                f"Large files may cause out-of-memory errors.",
             )
 
         if file_size_mb > 100:
             logger.warning(f"Processing large file ({file_size_mb:.1f}MB) - may consume significant VRAM")
 
-        logger.info(f"Processing audio file: {audio_file.filename} ({file_size_mb:.1f}MB), model: {model}, language: {language}")
+        logger.info(
+            f"Processing audio file: {audio_file.filename} ({file_size_mb:.1f}MB), model: {model}, language: {language}"
+        )
 
         # Load audio
-        audio = whisperx.load_audio(temp_audio_path)
+        audio = whispermlx.load_audio(temp_audio_path)
         prom_metrics.AUDIO_DURATION.observe(len(audio) / 16000.0)
 
         # Run pipeline through the async queue (GPU semaphore)
@@ -198,7 +198,7 @@ async def transcribe_audio(
                 "text": result.get("segments", []),
                 "language": detected_language,
                 "segments": result.get("segments", []),
-                "word_segments": result.get("word_segments", [])
+                "word_segments": result.get("word_segments", []),
             }
 
             if return_speaker_embeddings and speaker_embeddings:
@@ -232,8 +232,8 @@ async def transcribe_audio(
         elif output_format == "vtt":
             vtt_content = ["WEBVTT\n"]
             for segment in result.get("segments", []):
-                start_time = format_timestamp(segment.get("start", 0)).replace(',', '.')
-                end_time = format_timestamp(segment.get("end", 0)).replace(',', '.')
+                start_time = format_timestamp(segment.get("start", 0)).replace(",", ".")
+                end_time = format_timestamp(segment.get("end", 0)).replace(",", ".")
                 text = segment.get("text", "").strip()
                 speaker = segment.get("speaker", "")
 
@@ -314,11 +314,14 @@ async def queue_metrics():
 
 # Register OpenAI-compatible API routers
 # Import here to avoid circular imports (openai_compat imports from this module)
-from app.openai_compat import router as openai_router, models_router
+from app.openai_compat import models_router
+from app.openai_compat import router as openai_router
+
 app.include_router(openai_router)
 app.include_router(models_router)
 
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=9000)
