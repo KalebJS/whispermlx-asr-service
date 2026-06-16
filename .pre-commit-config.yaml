@@ -1,0 +1,10 @@
+# Pre-commit config for prek (and pre-commit compatible runners)
+# Install: pip install prek  OR  pip install pre-commit
+# Run:     prek run --all-files
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.12.0
+    hooks:
+      - id: ruff-check
+        args: ["--fix"]
+      - id: ruff-format
