@@ -136,8 +136,8 @@ class TestAsrResponseShape:
         assert "segments" in body, "Missing 'segments' key"
         assert "word_segments" in body, "Missing 'word_segments' key"
 
-    def test_text_is_joined_string(self, client_with_pipeline_mock):
-        """text field must be a proper joined string, not the segments array."""
+    def test_text_is_array_mirroring_segments(self, client_with_pipeline_mock):
+        """text field must be a JSON array mirroring segments (legacy shape)."""
         client, mock_queue, _, _ = client_with_pipeline_mock
         result = _mock_pipeline_result()
 
@@ -152,9 +152,14 @@ class TestAsrResponseShape:
         )
         assert resp.status_code == 200
         body = resp.json()
-        # text must be a string (the joined segment texts), not an array
-        assert isinstance(body["text"], str), f"text should be str, got {type(body['text'])}"
-        assert body["text"] == "Hello world", f"Expected 'Hello world', got '{body['text']}'"
+        # text must be an array mirroring segments (legacy whisper-asr-webservice shape)
+        assert isinstance(body["text"], list), f"text should be list, got {type(body['text'])}"
+        assert len(body["text"]) == len(body["segments"]), \
+            f"text length ({len(body['text'])}) != segments length ({len(body['segments'])})"
+        for i, (t, s) in enumerate(zip(body["text"], body["segments"])):
+            assert t["text"] == s["text"], f"text[{i}].text != segments[{i}].text"
+            assert t["start"] == s["start"], f"text[{i}].start != segments[{i}].start"
+            assert t["end"] == s["end"], f"text[{i}].end != segments[{i}].end"
 
     def test_language_echoed(self, client_with_pipeline_mock):
         """Detected language must be echoed in the response."""

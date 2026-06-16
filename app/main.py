@@ -205,11 +205,11 @@ async def transcribe_audio(
 
         # Format output based on requested format
         if output_format == "json":
-            # text is a joined string of all segment texts (proper transcript),
-            # while segments provides the structured array with start/end/text.
-            joined_text = " ".join(seg.get("text", "") for seg in result.get("segments", []))
+            # Legacy shape: text is a JSON ARRAY mirroring segments
+            # (same structure as the segments array), NOT a joined string.
+            # Preserves drop-in compatibility with the original whisper-asr-webservice.
             response_data = {
-                "text": joined_text,
+                "text": result.get("segments", []),
                 "language": detected_language,
                 "segments": result.get("segments", []),
                 "word_segments": result.get("word_segments", []),
