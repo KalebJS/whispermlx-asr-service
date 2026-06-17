@@ -42,7 +42,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 MAX_FILE_SIZE_MB = int(os.getenv("MAX_FILE_SIZE_MB", "1000"))
-SERVE_MODE = os.getenv("SERVE_MODE", "simple")
+SERVE_MODE = "simple"  # Ray Serve removed; always simple mode
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -365,9 +365,8 @@ async def queue_metrics():
         "serve_mode": SERVE_MODE,
         "device": DEVICE,
         "loaded_models": list(loaded_models.keys()),
+        "queue": get_queue_metrics(),
     }
-    if SERVE_MODE == "simple":
-        data["queue"] = get_queue_metrics()
     return data
 
 

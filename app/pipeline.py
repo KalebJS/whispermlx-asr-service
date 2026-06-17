@@ -46,8 +46,8 @@ MODEL_EVICTION_INTERVAL_SECONDS = max(30, int(os.getenv("MODEL_EVICTION_INTERVAL
 
 # MLX model map: short names → HuggingFace repo IDs for the MLX backend.
 # Sourced from whispermlx.asr.MLX_MODEL_MAP. Duplicated here so that
-# get_canonical_models() and resolve_model_name() work without importing
-# faster_whisper. Keep in sync with the upstream whispermlx package.
+# get_canonical_models() and resolve_model_name() work without a
+# faster-whisper dependency. Keep in sync with the upstream whispermlx package.
 MLX_MODEL_MAP = {
     "tiny": "mlx-community/whisper-tiny-mlx",
     "tiny.en": "mlx-community/whisper-tiny.en-mlx",

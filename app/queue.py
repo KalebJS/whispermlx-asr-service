@@ -1,8 +1,8 @@
 """
-Simple async queue with GPU semaphore for running without Ray.
+Simple async queue with GPU semaphore for the native uvicorn server.
 
 Provides backpressure and ensures only one pipeline invocation runs on the GPU
-at a time.  Used when SERVE_MODE=simple (default).
+at a time.
 """
 
 import asyncio
