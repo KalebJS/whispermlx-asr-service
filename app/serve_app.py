@@ -10,47 +10,48 @@ Start with:
     serve run app.serve_app:app
 """
 
-import os
-import time
+import contextlib
 import logging
+import os
 import tempfile
+import time
 import warnings
-from typing import Optional, List
 from pathlib import Path
 
-from fastapi import FastAPI, File, UploadFile, Form, Query, HTTPException, Request
-from fastapi.responses import JSONResponse, PlainTextResponse, Response
 import whisperx
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from ray import serve
 
-from app.version import __version__
+from app import metrics as prom_metrics
 from app.pipeline import (
-    DEVICE,
     COMPUTE_TYPE,
-    BATCH_SIZE,
     DEFAULT_MODEL,
+    DEVICE,
     format_timestamp,
-    sanitize_float_values,
-    resolve_model_name,
     get_canonical_models,
+    resolve_model_name,
+    sanitize_float_values,
+)
+from app.pipeline import (
     _whisper_models as loaded_models,
 )
-from app import metrics as prom_metrics
 from app.schemas import (
-    ResponseFormat,
-    TranscriptionWord,
-    TranscriptionSegment,
-    TranscriptionVerboseJsonResponse,
     OpenAIErrorDetail,
     OpenAIErrorResponse,
+    ResponseFormat,
+    TranscriptionSegment,
+    TranscriptionVerboseJsonResponse,
+    TranscriptionWord,
 )
 from app.serve_deployments import (
     PIPELINE_STRATEGY,
-    FullPipelineDeployment,
-    WhisperDeployment,
     AlignDeployment,
     DiarizeDeployment,
+    FullPipelineDeployment,
+    WhisperDeployment,
 )
+from app.version import __version__
 
 warnings.filterwarnings("ignore", message=".*degrees of freedom is <= 0.*")
 
@@ -181,19 +182,19 @@ class ASRIngress:
         self,
         audio_file: UploadFile = File(...),
         task: str = Query("transcribe"),
-        language: Optional[str] = Query(None),
-        initial_prompt: Optional[str] = Query(None),
-        hotwords: Optional[str] = Query(None),
+        language: str | None = Query(None),
+        initial_prompt: str | None = Query(None),
+        hotwords: str | None = Query(None),
         word_timestamps: bool = Query(True),
         output_format: str = Query("json"),
-        output: Optional[str] = Query(None),
+        output: str | None = Query(None),
         model: str = Query(DEFAULT_MODEL),
-        num_speakers: Optional[int] = Query(None),
-        min_speakers: Optional[int] = Query(None),
-        max_speakers: Optional[int] = Query(None),
-        diarize: Optional[bool] = Query(None),
-        enable_diarization: Optional[bool] = Query(None),
-        return_speaker_embeddings: Optional[bool] = Query(None),
+        num_speakers: int | None = Query(None),
+        min_speakers: int | None = Query(None),
+        max_speakers: int | None = Query(None),
+        diarize: bool | None = Query(None),
+        enable_diarization: bool | None = Query(None),
+        return_speaker_embeddings: bool | None = Query(None),
     ):
         temp_audio_path = None
         request_started = time.time()
@@ -279,10 +280,8 @@ class ASRIngress:
             prom_metrics.REQUESTS_TOTAL.labels(endpoint="/asr", status=metric_status).inc()
             prom_metrics.refresh_vram()
             if temp_audio_path and os.path.exists(temp_audio_path):
-                try:
+                with contextlib.suppress(Exception):
                     os.unlink(temp_audio_path)
-                except Exception:
-                    pass
 
     # ------------------------------------------------------------------
     # OpenAI-compat: /v1/audio/transcriptions
@@ -293,9 +292,9 @@ class ASRIngress:
         request: Request,
         file: UploadFile = File(...),
         model: str = Form(...),
-        language: Optional[str] = Form(None),
-        prompt: Optional[str] = Form(None),
-        hotwords: Optional[str] = Form(None),
+        language: str | None = Form(None),
+        prompt: str | None = Form(None),
+        hotwords: str | None = Form(None),
         response_format: ResponseFormat = Form(ResponseFormat.JSON),
         temperature: float = Form(0.0, ge=0.0, le=1.0),
     ):
@@ -322,8 +321,8 @@ class ASRIngress:
         request: Request,
         file: UploadFile = File(...),
         model: str = Form(...),
-        prompt: Optional[str] = Form(None),
-        hotwords: Optional[str] = Form(None),
+        prompt: str | None = Form(None),
+        hotwords: str | None = Form(None),
         response_format: ResponseFormat = Form(ResponseFormat.JSON),
         temperature: float = Form(0.0, ge=0.0, le=1.0),
     ):
@@ -513,10 +512,8 @@ class ASRIngress:
                                        error_type="server_error")
         finally:
             if temp_audio_path and os.path.exists(temp_audio_path):
-                try:
+                with contextlib.suppress(Exception):
                     os.unlink(temp_audio_path)
-                except Exception:
-                    pass
 
     # ------------------------------------------------------------------
     # /asr response formatting

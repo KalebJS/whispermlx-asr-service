@@ -12,25 +12,32 @@ Two strategies are available (selected via PIPELINE_STRATEGY env var):
       scaling per stage.
 """
 
-import os
 import logging
-from typing import Optional, List, Tuple
+import os
 
-import torch
 import numpy as np
+import torch
 from ray import serve
 
 from app.pipeline import (
-    run_pipeline as _run_pipeline,
-    transcribe as _transcribe,
-    align as _align,
-    diarize as _diarize,
-    load_whisper_model,
-    load_align_model,
-    load_diarize_pipeline,
     DEFAULT_MODEL,
     HF_TOKEN,
+    load_diarize_pipeline,
+    load_whisper_model,
 )
+from app.pipeline import (
+    align as _align,
+)
+from app.pipeline import (
+    diarize as _diarize,
+)
+from app.pipeline import (
+    run_pipeline as _run_pipeline,
+)
+from app.pipeline import (
+    transcribe as _transcribe,
+)
+
 
 def _attach_serve_handlers_to_app_logger():
     """
@@ -129,17 +136,17 @@ class FullPipelineDeployment:
         self,
         audio: np.ndarray,
         model_name: str = DEFAULT_MODEL,
-        language: Optional[str] = None,
+        language: str | None = None,
         task: str = "transcribe",
-        initial_prompt: Optional[str] = None,
-        hotwords: Optional[str] = None,
+        initial_prompt: str | None = None,
+        hotwords: str | None = None,
         word_timestamps: bool = True,
         should_diarize: bool = True,
-        num_speakers: Optional[int] = None,
-        min_speakers: Optional[int] = None,
-        max_speakers: Optional[int] = None,
+        num_speakers: int | None = None,
+        min_speakers: int | None = None,
+        max_speakers: int | None = None,
         return_speaker_embeddings: bool = False,
-    ) -> Tuple[dict, Optional[dict]]:
+    ) -> tuple[dict, dict | None]:
         return _run_pipeline(
             audio,
             model_name=model_name,
@@ -192,16 +199,16 @@ class WhisperDeployment:
     @serve.batch(max_batch_size=WHISPER_BATCH_SIZE, batch_wait_timeout_s=BATCH_WAIT_TIMEOUT)
     async def transcribe_batch(
         self,
-        audios: List[np.ndarray],
-        model_names: List[str],
-        languages: List[Optional[str]],
-        tasks: List[str],
-        initial_prompts: List[Optional[str]],
-        hotwords_list: List[Optional[str]],
-    ) -> List[dict]:
+        audios: list[np.ndarray],
+        model_names: list[str],
+        languages: list[str | None],
+        tasks: list[str],
+        initial_prompts: list[str | None],
+        hotwords_list: list[str | None],
+    ) -> list[dict]:
         results = []
         for audio, model_name, language, task, prompt, hotwords in zip(
-            audios, model_names, languages, tasks, initial_prompts, hotwords_list
+            audios, model_names, languages, tasks, initial_prompts, hotwords_list, strict=True
         ):
             result = _transcribe(
                 audio,
@@ -218,10 +225,10 @@ class WhisperDeployment:
         self,
         audio: np.ndarray,
         model_name: str = DEFAULT_MODEL,
-        language: Optional[str] = None,
+        language: str | None = None,
         task: str = "transcribe",
-        initial_prompt: Optional[str] = None,
-        hotwords: Optional[str] = None,
+        initial_prompt: str | None = None,
+        hotwords: str | None = None,
     ) -> dict:
         return await self.transcribe_batch(
             audio, model_name, language, task, initial_prompt, hotwords
@@ -240,11 +247,11 @@ class AlignDeployment:
     @serve.batch(max_batch_size=ALIGN_BATCH_SIZE, batch_wait_timeout_s=BATCH_WAIT_TIMEOUT)
     async def align_batch(
         self,
-        audios: List[np.ndarray],
-        results: List[dict],
-    ) -> List[dict]:
+        audios: list[np.ndarray],
+        results: list[dict],
+    ) -> list[dict]:
         aligned = []
-        for audio, result in zip(audios, results):
+        for audio, result in zip(audios, results, strict=True):
             aligned.append(_align(audio, result))
         return aligned
 
@@ -285,17 +292,17 @@ class DiarizeDeployment:
     )
     async def diarize_batch(
         self,
-        audios: List[np.ndarray],
-        results: List[dict],
-        num_speakers_list: List[Optional[int]],
-        min_speakers_list: List[Optional[int]],
-        max_speakers_list: List[Optional[int]],
-        return_embeddings_list: List[bool],
-    ) -> List[Tuple[dict, Optional[dict]]]:
+        audios: list[np.ndarray],
+        results: list[dict],
+        num_speakers_list: list[int | None],
+        min_speakers_list: list[int | None],
+        max_speakers_list: list[int | None],
+        return_embeddings_list: list[bool],
+    ) -> list[tuple[dict, dict | None]]:
         outputs = []
         for audio, result, num_spk, min_spk, max_spk, ret_emb in zip(
             audios, results, num_speakers_list, min_speakers_list,
-            max_speakers_list, return_embeddings_list,
+            max_speakers_list, return_embeddings_list, strict=True
         ):
             out = _diarize(
                 audio, result,
@@ -311,11 +318,11 @@ class DiarizeDeployment:
         self,
         audio: np.ndarray,
         result: dict,
-        num_speakers: Optional[int] = None,
-        min_speakers: Optional[int] = None,
-        max_speakers: Optional[int] = None,
+        num_speakers: int | None = None,
+        min_speakers: int | None = None,
+        max_speakers: int | None = None,
         return_speaker_embeddings: bool = False,
-    ) -> Tuple[dict, Optional[dict]]:
+    ) -> tuple[dict, dict | None]:
         return await self.diarize_batch(
             audio, result, num_speakers, min_speakers,
             max_speakers, return_speaker_embeddings,
