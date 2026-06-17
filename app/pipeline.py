@@ -29,11 +29,13 @@ logger = logging.getLogger(__name__)
 # Configuration (read once at import time, same as before)
 # ---------------------------------------------------------------------------
 DEVICE = os.getenv("DEVICE", "cpu")
-# COMPUTE_TYPE and BATCH_SIZE are accepted for API compatibility but ignored by MLX.
+# COMPUTE_TYPE and BATCH_SIZE are accepted for API compatibility with the
+# original CUDA-based service but are INERT under the MLX backend.  Setting
+# them will not error, but they have no effect on inference behaviour.
 COMPUTE_TYPE = os.getenv("COMPUTE_TYPE", "int8")
 BATCH_SIZE = int(os.getenv("BATCH_SIZE", "2"))
 HF_TOKEN = os.getenv("HF_TOKEN", None)
-CACHE_DIR = os.getenv("CACHE_DIR", "/.cache")
+CACHE_DIR = os.getenv("CACHE_DIR", os.path.expanduser("~/.cache/whisperx-asr"))
 DEFAULT_MODEL = os.getenv("PRELOAD_MODEL", "large-v3")
 
 # Idle model eviction. Set MODEL_KEEP_ALIVE_SECONDS > 0 to unload Whisper

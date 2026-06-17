@@ -52,7 +52,7 @@ app = FastAPI(
 )
 
 logger.info(f"Whispermlx ASR Service v{__version__} initialized on device: {DEVICE}")
-logger.info(f"Compute type: {COMPUTE_TYPE}, Batch size: {BATCH_SIZE}")
+logger.info(f"Compute type: {COMPUTE_TYPE} (inert under MLX), Batch size: {BATCH_SIZE} (inert under MLX)")
 logger.info(f"Default model: {DEFAULT_MODEL}, Serve mode: {SERVE_MODE}")
 
 
