@@ -508,7 +508,7 @@ class TestInvalidModel:
 
 
 # ===================================================================
-# VAL-OAI-021: missing model -> client error (4xx)
+# VAL-OAI-021: missing model -> client error with OpenAI envelope
 # ===================================================================
 
 class TestMissingModel:
@@ -522,9 +522,23 @@ class TestMissingModel:
         )
         assert resp.status_code >= 400 and resp.status_code < 500
 
+    def test_missing_model_returns_openai_envelope(self, client):
+        """VAL-OAI-025: missing model returns OpenAI error envelope, not bare FastAPI 422."""
+        c, _, _ = client
+        resp = c.post(
+            "/v1/audio/transcriptions",
+            files={"file": ("test.wav", FAKE_AUDIO, "audio/wav")},
+        )
+        assert resp.status_code == 400
+        body = resp.json()
+        assert "error" in body, f"Expected OpenAI envelope, got: {body}"
+        assert body["error"]["type"] == "invalid_request_error"
+        assert body["error"]["param"] == "model"
+        assert "detail" not in body, "Should not have bare FastAPI 'detail' shape"
+
 
 # ===================================================================
-# VAL-OAI-022: missing file -> client error (4xx)
+# VAL-OAI-022: missing file -> client error with OpenAI envelope
 # ===================================================================
 
 class TestMissingFile:
@@ -536,6 +550,20 @@ class TestMissingFile:
             data={"model": "whisper-1"},
         )
         assert resp.status_code >= 400 and resp.status_code < 500
+
+    def test_missing_file_returns_openai_envelope(self, client):
+        """VAL-OAI-025: missing file returns OpenAI error envelope, not bare FastAPI 422."""
+        c, _, _ = client
+        resp = c.post(
+            "/v1/audio/transcriptions",
+            data={"model": "whisper-1"},
+        )
+        assert resp.status_code == 400
+        body = resp.json()
+        assert "error" in body, f"Expected OpenAI envelope, got: {body}"
+        assert body["error"]["type"] == "invalid_request_error"
+        assert body["error"]["param"] == "file"
+        assert "detail" not in body, "Should not have bare FastAPI 'detail' shape"
 
 
 # ===================================================================
@@ -591,6 +619,22 @@ class TestOpenAIErrorEnvelope:
         resp = _post_transcriptions(c, {"model": "gpt-4o"})
         body = resp.json()
         assert "detail" not in body
+
+    def test_fastapi_request_validation_returns_openai_envelope(self, client):
+        """VAL-OAI-025: FastAPI RequestValidationError on /v1/ paths returns OpenAI envelope."""
+        c, _, _ = client
+        # Missing required 'model' triggers FastAPI's RequestValidationError
+        resp = c.post(
+            "/v1/audio/transcriptions",
+            files={"file": ("test.wav", FAKE_AUDIO, "audio/wav")},
+        )
+        assert resp.status_code == 400
+        body = resp.json()
+        assert "error" in body, f"Expected OpenAI envelope, got: {body}"
+        assert "detail" not in body, f"Should not have bare 'detail' shape: {body}"
+        error = body["error"]
+        assert error["type"] == "invalid_request_error"
+        assert error["param"] == "model"
 
 
 # ===================================================================

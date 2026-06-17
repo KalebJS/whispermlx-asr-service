@@ -11,7 +11,8 @@ import warnings
 from pathlib import Path
 
 import whispermlx
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 
 from app import metrics as prom_metrics
@@ -53,6 +54,46 @@ app = FastAPI(
 logger.info(f"Whispermlx ASR Service v{__version__} initialized on device: {DEVICE}")
 logger.info(f"Compute type: {COMPUTE_TYPE}, Batch size: {BATCH_SIZE}")
 logger.info(f"Default model: {DEFAULT_MODEL}, Serve mode: {SERVE_MODE}")
+
+
+@app.exception_handler(RequestValidationError)
+async def openai_validation_error_handler(request: Request, exc: RequestValidationError):
+    """
+    Convert FastAPI RequestValidationError to the OpenAI error envelope
+    ONLY for /v1/ paths.  Non-/v1/ paths (e.g. /asr) keep the bare
+    FastAPI 422 {"detail": [...]} shape so existing /asr clients are
+    unaffected (VAL-ASR-011, VAL-OPS-014).
+    """
+    if request.url.path.startswith("/v1/"):
+        errors = exc.errors()
+        # Build a descriptive message and extract the first failing field as param
+        messages = []
+        param = None
+        for err in errors:
+            loc = err.get("loc", [])
+            field = loc[-1] if loc else None
+            msg = err.get("msg", "Validation error")
+            if field:
+                messages.append(f"{field}: {msg}")
+                if param is None:
+                    param = str(field)
+            else:
+                messages.append(msg)
+        message = "; ".join(messages) if messages else "Validation error"
+
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "message": message,
+                    "type": "invalid_request_error",
+                    "param": param,
+                    "code": None,
+                }
+            },
+        )
+    # Non-/v1/ paths: return the default FastAPI 422 detail shape
+    return JSONResponse(status_code=422, content={"detail": exc.errors()})
 
 
 @app.on_event("startup")
