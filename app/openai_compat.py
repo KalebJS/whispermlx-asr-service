@@ -8,12 +8,14 @@ GET /v1/models
 import logging
 import os
 import tempfile
+import time
 from pathlib import Path
 
 import whispermlx
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse
 
+from app import metrics as prom_metrics
 from app.pipeline import (
     DEFAULT_MODEL,
     format_timestamp,
@@ -170,17 +172,22 @@ async def process_audio(
     timestamp_granularities: list[str],
     task: str = "transcribe",
     hotwords: str | None = None,
+    endpoint: str = "/v1/audio/transcriptions",
 ) -> JSONResponse | PlainTextResponse:
     """
     Core audio processing function shared by transcriptions and translations endpoints
     """
     temp_audio_path = None
+    request_started = time.time()
+    metric_status = "ok"
+    prom_metrics.ACTIVE_TRANSCRIPTIONS.inc()
 
     try:
         # Validate model using resolve_model_name (handles aliases + MLX canonical names)
         resolved_model = resolve_model_name(model)
         canonical_models = set(get_canonical_models())
         if resolved_model not in canonical_models and model not in MODEL_MAPPING:
+            metric_status = "http_400"
             return create_openai_error(
                 400,
                 f"Invalid model: {model}. Supported: whisper-1, or MLX models ({', '.join(sorted(canonical_models))})",
@@ -190,12 +197,14 @@ async def process_audio(
 
         # Validate timestamp_granularities requires verbose_json
         if timestamp_granularities and response_format != ResponseFormat.VERBOSE_JSON:
+            metric_status = "http_400"
             return create_openai_error(
                 400, "timestamp_granularities requires response_format='verbose_json'", param="timestamp_granularities"
             )
 
         # Validate temperature range
         if temperature < 0 or temperature > 1:
+            metric_status = "http_400"
             return create_openai_error(400, "temperature must be between 0 and 1", param="temperature")
 
         # Save uploaded file to temporary location
@@ -207,7 +216,9 @@ async def process_audio(
 
         # Check file size
         file_size_mb = len(content) / (1024 * 1024)
+        prom_metrics.AUDIO_SIZE_MB.observe(file_size_mb)
         if file_size_mb > MAX_FILE_SIZE_MB:
+            metric_status = "http_413"
             return create_openai_error(
                 413, f"File too large ({file_size_mb:.1f}MB). Maximum: {MAX_FILE_SIZE_MB}MB", code="file_too_large"
             )
@@ -219,6 +230,7 @@ async def process_audio(
         # Load audio
         audio = whispermlx.load_audio(temp_audio_path)
         duration = len(audio) / 16000  # whispermlx loads at 16kHz
+        prom_metrics.AUDIO_DURATION.observe(duration)
 
         need_word_timestamps = response_format == ResponseFormat.VERBOSE_JSON and "word" in timestamp_granularities
 
@@ -267,16 +279,23 @@ async def process_audio(
             )
             return JSONResponse(content=response.model_dump(exclude_none=True))
 
+        metric_status = "http_400"
         return create_openai_error(400, f"Unsupported response format: {response_format}")
 
     except HTTPException as e:
+        metric_status = f"http_{e.status_code}"
         return create_openai_error(e.status_code, e.detail)
 
     except Exception as e:
+        metric_status = "error"
         logger.error(f"OpenAI-compat error: {str(e)}", exc_info=True)
         return create_openai_error(500, f"Internal server error: {str(e)}", error_type="server_error")
 
     finally:
+        prom_metrics.ACTIVE_TRANSCRIPTIONS.dec()
+        prom_metrics.REQUEST_DURATION.labels(endpoint=endpoint).observe(time.time() - request_started)
+        prom_metrics.REQUESTS_TOTAL.labels(endpoint=endpoint, status=metric_status).inc()
+        prom_metrics.refresh_vram()
         if temp_audio_path and os.path.exists(temp_audio_path):
             try:
                 os.unlink(temp_audio_path)
@@ -320,6 +339,7 @@ async def create_transcription(
         timestamp_granularities=timestamp_granularities,
         task="transcribe",
         hotwords=hotwords,
+        endpoint="/v1/audio/transcriptions",
     )
 
 
@@ -358,6 +378,7 @@ async def create_translation(
         timestamp_granularities=timestamp_granularities,
         task="translate",
         hotwords=hotwords,
+        endpoint="/v1/audio/translations",
     )
 
 

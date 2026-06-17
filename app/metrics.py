@@ -45,7 +45,7 @@ AUDIO_SIZE_MB = Histogram(
 )
 VRAM_ALLOCATED_BYTES = Gauge(
     "whisperx_vram_allocated_bytes",
-    "Currently allocated VRAM (CUDA only; 0 on CPU)",
+    "Currently allocated GPU memory via MLX active memory (or 0 on CPU)",
 )
 SERVICE_INFO = Info("whisperx_service", "Static service identity")
 

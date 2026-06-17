@@ -115,6 +115,10 @@ async def startup_event():
             logger.info(f"Successfully preloaded model: {preload_model}")
         except Exception as e:
             logger.error(f"Failed to preload model {preload_model}: {str(e)}")
+    # Reflect preloaded model(s) in the loaded-models gauge so that
+    # /metrics shows whisperx_loaded_models >= 1 before any request
+    # (VAL-CROSS-016).
+    prom_metrics.LOADED_MODELS.set(len(loaded_models))
 
 
 @app.get("/")
