@@ -295,7 +295,7 @@ async def create_transcription(
     response_format: ResponseFormat = Form(
         ResponseFormat.JSON, description="Output format: json, text, srt, verbose_json, vtt"
     ),
-    temperature: float = Form(0.0, ge=0.0, le=1.0, description="Sampling temperature"),
+    temperature: float = Form(0.0, description="Sampling temperature (0-1)"),
 ):
     """
     Transcribes audio into the input language.
@@ -333,7 +333,7 @@ async def create_translation(
     response_format: ResponseFormat = Form(
         ResponseFormat.JSON, description="Output format: json, text, srt, verbose_json, vtt"
     ),
-    temperature: float = Form(0.0, ge=0.0, le=1.0, description="Sampling temperature"),
+    temperature: float = Form(0.0, description="Sampling temperature (0-1)"),
 ):
     """
     Translates audio into English.
