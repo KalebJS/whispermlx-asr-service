@@ -8,8 +8,9 @@ at a time.  Used when SERVE_MODE=simple (default).
 import asyncio
 import logging
 import os
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +19,7 @@ GPU_CONCURRENCY = int(os.getenv("GPU_CONCURRENCY", "1"))
 
 # Thread pool for running blocking pipeline calls without blocking the event loop
 _executor = ThreadPoolExecutor(max_workers=GPU_CONCURRENCY)
-_gpu_semaphore: Optional[asyncio.Semaphore] = None
+_gpu_semaphore: asyncio.Semaphore | None = None
 
 # Metrics counters
 _requests_queued = 0
