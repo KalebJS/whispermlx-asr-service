@@ -74,7 +74,7 @@ def create_openai_error(
 def format_verbose_json_response(
     result: dict, task: str, language: str, duration: float, include_words: bool, include_segments: bool
 ) -> TranscriptionVerboseJsonResponse:
-    """Format WhisperX result as OpenAI verbose_json response"""
+    """Format whispermlx result as OpenAI verbose_json response"""
 
     full_text = " ".join([seg.get("text", "").strip() for seg in result.get("segments", [])]).strip()
 
@@ -118,7 +118,7 @@ def format_verbose_json_response(
 
 
 def format_srt_response(result: dict) -> str:
-    """Format WhisperX result as SRT subtitle format"""
+    """Format whispermlx result as SRT subtitle format"""
     srt_content = []
     for i, segment in enumerate(result.get("segments", []), 1):
         start_time = format_timestamp(segment.get("start", 0))
@@ -129,7 +129,7 @@ def format_srt_response(result: dict) -> str:
 
 
 def format_vtt_response(result: dict) -> str:
-    """Format WhisperX result as WebVTT subtitle format"""
+    """Format whispermlx result as WebVTT subtitle format"""
     vtt_content = ["WEBVTT\n"]
     for segment in result.get("segments", []):
         start_time = format_timestamp(segment.get("start", 0)).replace(",", ".")

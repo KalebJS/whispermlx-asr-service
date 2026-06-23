@@ -1,3 +1,3 @@
-"""WhisperX ASR API Service"""
+"""Whispermlx ASR API Service"""
 
 __version__ = "0.3.2"

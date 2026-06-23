@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Stress test for the WhisperX ASR service.
+Stress test for the Whispermlx ASR service.
 
 Sends concurrent requests using audio files from the 'test files/' directory
 and reports throughput, latency, and error rates.
@@ -396,7 +396,7 @@ def print_report(report: TestReport):
 # Main
 # ---------------------------------------------------------------------------
 def main():
-    parser = argparse.ArgumentParser(description="Stress test the WhisperX ASR service")
+    parser = argparse.ArgumentParser(description="Stress test the Whispermlx ASR service")
     parser.add_argument("--url", default=DEFAULT_URL, help="Base URL (default: %(default)s)")
     parser.add_argument(
         "--endpoint", choices=["asr", "openai"], default="asr", help="Endpoint to test (default: %(default)s)"

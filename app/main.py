@@ -1,5 +1,5 @@
 """
-WhisperX ASR API Service
+Whispermlx ASR API Service
 Compatible with openai-whisper-asr-webservice API endpoints
 """
 
@@ -83,8 +83,8 @@ async def lifespan(app: FastAPI):
 
 # Initialize FastAPI app
 app = FastAPI(
-    title="WhisperX ASR API",
-    description="Automatic Speech Recognition API with Speaker Diarization using WhisperX",
+    title="Whispermlx ASR API",
+    description="Automatic Speech Recognition API with Speaker Diarization using whispermlx",
     version=__version__,
     lifespan=lifespan,
 )
@@ -135,7 +135,7 @@ async def root():
     """Health check endpoint"""
     return {
         "status": "running",
-        "service": "WhisperX ASR API",
+        "service": "Whispermlx ASR API",
         "device": DEVICE,
         "compute_type": COMPUTE_TYPE,
         "serve_mode": SERVE_MODE,
@@ -170,7 +170,7 @@ async def transcribe_audio(
         initial_prompt: Optional prompt to guide the model
         word_timestamps: Return word-level timestamps
         output_format: json, text, srt, vtt, or tsv
-        model: WhisperX model name (tiny, base, small, medium, large-v2, large-v3)
+        model: whispermlx model name (tiny, base, small, medium, large-v2, large-v3)
         num_speakers: Exact number of speakers (if known, overrides min/max)
         min_speakers: Minimum number of speakers for diarization
         max_speakers: Maximum number of speakers for diarization
