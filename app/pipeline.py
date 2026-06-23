@@ -383,12 +383,158 @@ def diarize(
             logger.info("Using exclusive speaker diarization for better timestamp reconciliation")
 
         result = whispermlx.assign_word_speakers(diarize_segments, result)
+
+        # Re-split coarse segments along diarization turn boundaries when
+        # no segment has word-level data (word_timestamps=false path).
+        # This fixes the case where assign_word_speakers collapses multi-speaker
+        # audio to a single dominant speaker on a coarse segment.
+        result = _resplit_segments_on_diarization_turns(result, diarize_segments)
+
         logger.info("Speaker diarization complete")
         clear_gpu_memory()
     except Exception as e:
         logger.warning(f"Speaker diarization failed: {e}, continuing without diarization")
 
     return result, speaker_embeddings
+
+
+# ---------------------------------------------------------------------------
+# Segment re-split helper (for diarize=true + word_timestamps=false)
+# ---------------------------------------------------------------------------
+
+
+def _resplit_segments_on_diarization_turns(result: dict, diarize_segments) -> dict:
+    """
+    Re-split coarse transcript segments along diarization turn boundaries
+    when no segment has word-level data (word_timestamps=false path).
+
+    ROOT CAUSE: whispermlx.transcribe returns ONE coarse merged segment for
+    audio shorter than the 30s VAD chunk, and whispermlx.assign_word_speakers
+    only assigns the single dominant speaker to that one segment, collapsing
+    multi-speaker audio to 1 speaker.
+
+    This helper re-splits segments along the diarization turn boundaries so
+    that each speaker run becomes its own sub-segment with the correct label.
+
+    Rules:
+    1. Guard: if any segment already has word-level data, return immediately
+       (the word_timestamps=true / aligned path is completely untouched).
+    2. For each coarse segment, clip diarization turns to the segment span,
+       merge consecutive same-speaker runs, and emit one sub-segment per
+       speaker run with start/end set to the clipped turn bounds.
+    3. Apportion segment text across sub-segments by duration (no per-word
+       timing available) so each sub-segment text is non-empty where possible.
+    4. NEVER add a 'words' key to any segment.
+    5. If a segment has zero overlapping turns, leave it as-is (retains the
+       dominant-speaker label from assign_word_speakers) so behavior never
+       regresses.
+    """
+    segments = result.get("segments", [])
+
+    # Guard: if any segment already has word-level data, do nothing
+    if any(seg.get("words") for seg in segments):
+        return result
+
+    # Extract diarization turns from the DataFrame
+    try:
+        turns = [(row["start"], row["end"], row["speaker"]) for _, row in diarize_segments.iterrows()]
+    except (AttributeError, KeyError, TypeError):
+        # diarize_segments is not a usable DataFrame; return unchanged
+        return result
+
+    if not turns:
+        return result
+
+    # Sort turns by start time
+    turns.sort(key=lambda t: (t[0], t[1]))
+
+    new_segments = []
+    for seg in segments:
+        seg_start = seg.get("start", 0.0)
+        seg_end = seg.get("end", 0.0)
+        seg_text = seg.get("text", "")
+
+        # Clip turns to the segment span
+        clipped = []
+        for t_start, t_end, t_speaker in turns:
+            c_start = max(t_start, seg_start)
+            c_end = min(t_end, seg_end)
+            if c_start < c_end:  # Has positive overlap
+                clipped.append((c_start, c_end, t_speaker))
+
+        if not clipped:
+            # No overlapping turns: leave segment as-is (retains dominant speaker)
+            new_segments.append(seg)
+            continue
+
+        # Merge consecutive same-speaker runs
+        merged = [clipped[0]]
+        for t_start, t_end, t_speaker in clipped[1:]:
+            prev_start, prev_end, prev_speaker = merged[-1]
+            if t_speaker == prev_speaker and t_start <= prev_end:
+                # Extend the previous run
+                merged[-1] = (prev_start, max(prev_end, t_end), prev_speaker)
+            else:
+                merged.append((t_start, t_end, t_speaker))
+
+        # Apportion text across sub-segments by duration
+        total_duration = sum(end - start for start, end, _ in merged)
+        if total_duration <= 0:
+            new_segments.append(seg)
+            continue
+
+        text_words = seg_text.strip().split()
+        n_words = len(text_words)
+
+        if n_words == 0:
+            # No words to apportion; each sub-segment gets the full text
+            for sub_start, sub_end, sub_speaker in merged:
+                sub_seg = {
+                    "start": sub_start,
+                    "end": sub_end,
+                    "text": seg_text,
+                    "speaker": sub_speaker,
+                }
+                for key in seg:
+                    if key not in sub_seg and key != "words":
+                        sub_seg[key] = seg[key]
+                new_segments.append(sub_seg)
+            continue
+
+        # Distribute words proportionally based on duration
+        durations = [end - start for start, end, _ in merged]
+        remaining_subsegments = len(merged)
+        word_cursor = 0
+
+        for i, (sub_start, sub_end, sub_speaker) in enumerate(merged):
+            remaining_subsegments = len(merged) - i
+            if i < len(merged) - 1:
+                n = max(1, round(n_words * durations[i] / total_duration))
+                # Ensure at least 1 word per remaining sub-segment
+                max_n = n_words - word_cursor - remaining_subsegments + 1
+                n = min(n, max(max_n, 1))
+            else:
+                n = n_words - word_cursor  # remainder
+
+            sub_words = text_words[word_cursor : word_cursor + n]
+            sub_text = " ".join(sub_words) if sub_words else seg_text
+            word_cursor += n
+
+            sub_seg = {
+                "start": sub_start,
+                "end": sub_end,
+                "text": sub_text,
+                "speaker": sub_speaker,
+            }
+            # Copy other keys from original segment (except 'words')
+            for key in seg:
+                if key not in sub_seg and key != "words":
+                    sub_seg[key] = seg[key]
+
+            new_segments.append(sub_seg)
+
+    result["segments"] = new_segments
+    return result
 
 
 # ---------------------------------------------------------------------------
