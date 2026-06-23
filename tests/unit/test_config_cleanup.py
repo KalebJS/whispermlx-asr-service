@@ -81,9 +81,9 @@ class TestEnvExampleClean:
             assert "docker" not in lower, f"Docker reference found: {stripped}"
             assert "container" not in lower, f"Container reference found: {stripped}"
 
-    def test_device_defaults_to_cpu(self, env_example_content):
-        """DEVICE=cpu must be the documented default."""
-        assert "DEVICE=cpu" in env_example_content
+    def test_device_defaults_to_mps(self, env_example_content):
+        """DEVICE=mps must be the documented default (matches whispermlx upstream)."""
+        assert "DEVICE=mps" in env_example_content
 
     def test_port_9001_documented(self, env_example_content):
         """PORT=9001 must be documented."""
@@ -202,13 +202,13 @@ class TestComputeTypeBatchSizeInert:
         assert expected_default == os.path.expanduser("~/.cache/whisperx-asr")
 
     def test_cuda_not_default_device(self):
-        """DEVICE must default to 'cpu', never 'cuda'.  Verify via source."""
+        """DEVICE must default to 'mps', never 'cuda'.  Verify via source."""
         import app.pipeline as pipeline_mod
 
         source = inspect.getsource(pipeline_mod)
         for line in source.splitlines():
             if 'os.getenv("DEVICE"' in line or "os.getenv('DEVICE'" in line:
-                assert '"cpu"' in line or "'cpu'" in line, f"DEVICE default should be 'cpu': {line.strip()}"
+                assert '"mps"' in line or "'mps'" in line, f"DEVICE default should be 'mps': {line.strip()}"
                 assert '"cuda"' not in line and "'cuda'" not in line, (
                     f"DEVICE default must not be 'cuda': {line.strip()}"
                 )

@@ -88,5 +88,5 @@ When working on this codebase, keep in mind that `COMPUTE_TYPE`, `BATCH_SIZE`, a
 
 - No authentication is built in. Do not expose the service directly to the internet without a reverse proxy or firewall.
 - `HF_TOKEN` is required for speaker diarization. Store it in `.env` (gitignored), never hardcoded.
-- MLX Whisper ASR always runs on the Metal GPU. The `DEVICE` env var only affects torch-based stages (VAD, alignment, diarization).
+- MLX Whisper ASR always runs on the Metal GPU. The `DEVICE` env var (default `mps`) controls torch-based stages (VAD, alignment, diarization). Using `cpu` makes diarization extremely slow on long audio.
 - `COMPUTE_TYPE` and `BATCH_SIZE` are accepted for API compatibility but have no effect on the MLX backend.

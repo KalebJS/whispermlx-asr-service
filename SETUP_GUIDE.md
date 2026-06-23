@@ -103,7 +103,7 @@ HF_TOKEN=hf_your_token_here
 
 # Device for torch-based stages (VAD, alignment, diarization).
 # MLX Whisper ASR always runs on the Metal GPU automatically.
-DEVICE=cpu
+DEVICE=mps
 
 # Model to preload on startup (optional, reduces first-request latency)
 PRELOAD_MODEL=large-v3
@@ -137,9 +137,9 @@ HF_TOKEN=hf_your_token_here
 # automatically regardless of this setting.
 #
 # Options:
-#   cpu   - Safe default on Apple Silicon; torch stages on CPU, ASR on Metal GPU
-#   mps   - Use Apple MPS for torch stages (experimental)
-DEVICE=cpu
+#   mps   - Use Apple MPS for torch stages (default, recommended)
+#   cpu   - Fallback if MPS is unstable; diarization will be much slower
+DEVICE=mps
 
 # ---------------------------------------------------------------------------
 # Compute Type & Batch Size (accepted but INERT under MLX)
@@ -242,7 +242,7 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 9001
 **Option C: With specific environment variables**
 
 ```bash
-DEVICE=cpu PRELOAD_MODEL=base uv run uvicorn app.main:app --host 127.0.0.1 --port 9001
+DEVICE=mps PRELOAD_MODEL=base uv run uvicorn app.main:app --host 127.0.0.1 --port 9001
 ```
 
 Look for:

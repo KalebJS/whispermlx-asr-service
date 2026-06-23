@@ -36,7 +36,7 @@ Audio --> MLX Whisper (transcription, Metal GPU) --> Wav2Vec2 (alignment) --> Py
 
 The service runs as a single-process uvicorn server with an async queue. Requests are serialized through a semaphore so only one pipeline runs on the Metal GPU at a time. This is suitable for single-device, low-traffic, or development use.
 
-**Device semantics:** MLX Whisper ASR always runs on the Metal GPU automatically. The `DEVICE` environment variable (default `cpu`) only controls where the VAD, wav2vec2 alignment, and pyannote diarization (torch-based stages) run. `COMPUTE_TYPE` and `BATCH_SIZE` are accepted for API compatibility but have no effect on the MLX backend.
+**Device semantics:** MLX Whisper ASR always runs on the Metal GPU automatically. The `DEVICE` environment variable (default `mps`) only controls where the VAD, wav2vec2 alignment, and pyannote diarization (torch-based stages) run. `COMPUTE_TYPE` and `BATCH_SIZE` are accepted for API compatibility but have no effect on the MLX backend.
 
 ## Prerequisites
 
@@ -115,7 +115,7 @@ Minimal `.env`:
 
 ```bash
 HF_TOKEN=hf_your_token_here
-DEVICE=cpu
+DEVICE=mps
 PRELOAD_MODEL=large-v3
 PORT=9001
 ```
@@ -326,7 +326,7 @@ Returns the matching model object, or a 404 OpenAI error for unknown ids.
 ```bash
 # Health check
 curl http://localhost:9001/health
-# {"status": "healthy", "device": "cpu", "loaded_models": ["large-v3"], "serve_mode": "simple"}
+# {"status": "healthy", "device": "mps", "loaded_models": ["large-v3"], "serve_mode": "simple"}
 
 # Root endpoint
 curl http://localhost:9001/
@@ -391,7 +391,7 @@ Edit `.env` to customize:
 ```bash
 # Device for torch-based stages (VAD, alignment, diarization).
 # MLX Whisper ASR always runs on the Metal GPU regardless of this setting.
-DEVICE=cpu              # cpu (default) or mps (experimental)
+DEVICE=mps              # mps (default, recommended) or cpu (fallback, slower diarization)
 
 # Compute type and batch size (accepted but INERT under MLX — no effect on inference)
 # Code defaults: COMPUTE_TYPE=int8, BATCH_SIZE=2 (leftover from CUDA era, unused)
@@ -481,7 +481,7 @@ set -a; source .env; set +a
 uv run uvicorn app.main:app --host 127.0.0.1 --port 9001 --env-file .env
 
 # With environment variables inline (no .env needed)
-DEVICE=cpu PRELOAD_MODEL=base uv run uvicorn app.main:app --host 127.0.0.1 --port 9001
+DEVICE=mps PRELOAD_MODEL=base uv run uvicorn app.main:app --host 127.0.0.1 --port 9001
 ```
 
 ---
@@ -521,7 +521,7 @@ tail -f service.log
 
 ```bash
 curl http://localhost:9001/health
-# {"status": "healthy", "device": "cpu", "loaded_models": ["large-v3"], "serve_mode": "simple"}
+# {"status": "healthy", "device": "mps", "loaded_models": ["large-v3"], "serve_mode": "simple"}
 ```
 
 ---

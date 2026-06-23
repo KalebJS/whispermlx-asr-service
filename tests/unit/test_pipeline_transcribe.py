@@ -86,17 +86,17 @@ class TestImports:
 
 
 class TestDeviceConfig:
-    """Verify DEVICE defaults to cpu (no torch.cuda check)."""
+    """Verify DEVICE defaults to mps (matches whispermlx upstream)."""
 
-    def test_default_device_is_cpu(self):
-        """DEVICE env var defaults to 'cpu' without any CUDA check."""
+    def test_default_device_is_mps(self):
+        """DEVICE env var defaults to 'mps' without any CUDA check."""
         with patch.dict("os.environ", {}, clear=False):
             # Remove DEVICE from env if present
             env = dict(__import__("os").environ)
             env.pop("DEVICE", None)
             with patch("os.environ", env):
                 pipeline = _import_pipeline()
-                assert pipeline.DEVICE == "cpu", f"Expected DEVICE='cpu', got '{pipeline.DEVICE}'"
+                assert pipeline.DEVICE == "mps", f"Expected DEVICE='mps', got '{pipeline.DEVICE}'"
 
     def test_device_from_env(self):
         """DEVICE can be overridden via environment variable."""

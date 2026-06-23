@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Configuration (read once at import time, same as before)
 # ---------------------------------------------------------------------------
-DEVICE = os.getenv("DEVICE", "cpu")
+DEVICE = os.getenv("DEVICE", "mps")
 # COMPUTE_TYPE and BATCH_SIZE are accepted for API compatibility with the
 # original CUDA-based service but are INERT under the MLX backend.  Setting
 # them will not error, but they have no effect on inference behaviour.
