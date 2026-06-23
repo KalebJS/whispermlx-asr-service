@@ -71,3 +71,24 @@
 - WhisperX integration with API wrapper
 - Speaker diarization support
 - Docker deployment
+
+## v0.5.0 (2026-06-23)
+
+### Feat
+
+- add console_scripts entry point for uvx support
+
+### Fix
+
+- pin numba>=0.60 to override mlx-whisper's stale numba==0.53.1
+- update repo URLs to match renamed whispermlx-asr-service
+
+## v0.4.0 (2026-06-23)
+
+## v0.3.2 (2026-05-03)
+
+## v0.3.1 (2026-03-01)
+
+## v0.3.0 (2026-02-28)
+
+## v0.2.0 (2026-01-21)
