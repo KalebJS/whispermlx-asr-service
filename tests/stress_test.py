@@ -19,7 +19,7 @@ Usage:
     python tests/stress_test.py --workers 1 --rounds 1
 
     # Custom base URL
-    python tests/stress_test.py --url http://remote-host:9000
+    python tests/stress_test.py --url http://remote-host:9001
 """
 
 import argparse
@@ -38,7 +38,7 @@ import requests
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-DEFAULT_URL = "http://localhost:9000"
+DEFAULT_URL = "http://localhost:9001"
 TEST_FILES_DIR = Path(__file__).parent.parent / "testfiles"
 
 
@@ -137,7 +137,7 @@ def validate_openai_response(data: dict, result: RequestResult):
 def send_asr_request(
     base_url: str,
     file_path: Path,
-    model: str = "large-v3",
+    model: str = "tiny",
     diarize: bool = True,
 ) -> RequestResult:
     """Send a request to the /asr endpoint."""
@@ -413,13 +413,13 @@ def main():
     parser.add_argument("--rounds", type=int, default=1,
                         help="Number of rounds (each round sends all files) (default: %(default)s)")
     parser.add_argument("--model", default=None,
-                        help="Model name (default: large-v3 for /asr, whisper-1 for openai)")
+                        help="Model name (default: tiny for /asr, whisper-1 for openai)")
     parser.add_argument("--no-diarize", action="store_true",
                         help="Disable diarization (only for /asr endpoint)")
     args = parser.parse_args()
 
     if args.model is None:
-        args.model = "large-v3" if args.endpoint == "asr" else "whisper-1"
+        args.model = "tiny" if args.endpoint == "asr" else "whisper-1"
 
     # Health check
     try:

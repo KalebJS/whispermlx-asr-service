@@ -1,13 +1,19 @@
 #!/bin/bash
-# test-api.sh - Test script for WhisperX ASR API
+# test-api.sh - Smoke test script for the native whispermlx ASR API
+#
+# Usage:
+#   ./test-api.sh                              # default: localhost:9001
+#   ./test-api.sh 127.0.0.1 9001 path/to/audio.wav
+#
+# The service runs natively (uvicorn on port 9001, no Docker, no Ray).
 
 # Configuration
 HOST=${1:-"localhost"}
-PORT=${2:-"9000"}
+PORT=${2:-"9001"}
 BASE_URL="http://${HOST}:${PORT}"
 
 echo "========================================"
-echo "WhisperX ASR API Test Script"
+echo "Whispermlx ASR API Test Script"
 echo "========================================"
 echo "Testing endpoint: ${BASE_URL}"
 echo ""
@@ -53,9 +59,9 @@ if [ -f "$3" ]; then
     response=$(curl -s -X POST "${BASE_URL}/asr" \
         -F "audio_file=@$3" \
         -F "language=en" \
-        -F "model=small" \
+        -F "model=tiny" \
         -F "output_format=json" \
-        -F "enable_diarization=false")
+        -F "diarize=false")
 
     if [ $? -eq 0 ]; then
         echo "✓ Transcription successful"
@@ -70,7 +76,7 @@ else
     echo "Test 4: Sample Transcription"
     echo "---------------------------"
     echo "⚠ Skipped - No audio file provided"
-    echo "Usage: $0 [host] [port] [audio_file.mp3]"
+    echo "Usage: $0 [host] [port] [audio_file.wav]"
 fi
 echo ""
 

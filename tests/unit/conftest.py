@@ -1,5 +1,6 @@
 """Shared fixtures for unit tests (whispermlx mocked, fast, no model downloads)."""
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -10,10 +11,15 @@ def pytest_collection_modifyitems(config, items):
 
     This lets callers run ``pytest -m unit`` (or exclude with ``-m "not unit"``)
     without requiring each test file to add decorators individually.
+
+    Only marks tests whose file path is under tests/unit so that integration
+    tests collected in the same session are not accidentally marked unit.
     """
     unit_marker = pytest.mark.unit
+    unit_dir = str(Path(__file__).resolve().parent)
     for item in items:
-        item.add_marker(unit_marker)
+        if unit_dir in str(item.fspath):
+            item.add_marker(unit_marker)
 
 
 @pytest.fixture(autouse=True)

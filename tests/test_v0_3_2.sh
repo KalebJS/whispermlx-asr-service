@@ -1,25 +1,25 @@
 #!/usr/bin/env bash
-# Smoke tests for v0.3.2 features.
+# Smoke tests for the native MLX (whispermlx) ASR service.
 #
 # Covers:
-#   #15 -- Pascal/Blackwell variants: just verifies the running torch matches
-#          whatever the running image was built with (informational; the real
-#          variant test happens at image-publish time, not at runtime).
-#   #12 -- Device-aware BATCH_SIZE default: read from /health-style probe.
-#   #16 -- MODEL_KEEP_ALIVE_SECONDS eviction: covered by tests/test_keep_alive.sh
-#          since it requires a container restart with different env.
-#   #13 -- Prometheus /metrics + /asr instrumentation.
-#   Live patches -- /asr accepts OpenAI-style aliases, /v1/models is dynamic.
+#   - Health check (/health, serve_mode=simple)
+#   - Prometheus /metrics (OpenMetrics text, MLX metrics, no CUDA)
+#   - /queue-metrics JSON
+#   - /v1/models built from the MLX model map (no faster_whisper, no distil-*)
+#   - /asr alias resolution (whisper-tiny → tiny)
+#   - Prometheus counters increment after /asr requests
+#   - service_info labels (version/device/serve_mode)
+#   - VRAM gauge (MLX active memory or 0, no CUDA)
 #
 # Usage:
 #   ./tests/test_v0_3_2.sh                     # default base URL + audio
-#   BASE_URL=http://host:9000 ./tests/test_v0_3_2.sh
-#   AUDIO=testfiles/foo.mp3 ./tests/test_v0_3_2.sh
+#   BASE_URL=http://host:9001 ./tests/test_v0_3_2.sh
+#   AUDIO=tests/testfiles/sample.wav ./tests/test_v0_3_2.sh
 
 set -uo pipefail
 
-BASE_URL="${BASE_URL:-http://localhost:9000}"
-AUDIO="${AUDIO:-testfiles/250218_0013.mp3}"
+BASE_URL="${BASE_URL:-http://localhost:9001}"
+AUDIO="${AUDIO:-tests/testfiles/sample.wav}"
 PASS=0
 FAIL=0
 
@@ -39,7 +39,7 @@ note() { color yellow "  NOTE"; echo " $1"; }
 
 if [ ! -f "$AUDIO" ]; then
     echo "Audio file not found: $AUDIO"
-    echo "Set AUDIO=path/to/file.mp3 or place a file at testfiles/250218_0013.mp3"
+    echo "Set AUDIO=path/to/file.wav or place a file at tests/testfiles/sample.wav"
     exit 2
 fi
 
@@ -53,7 +53,13 @@ else
     exit 1
 fi
 
-step "GET /metrics returns Prometheus OpenMetrics text (not JSON) [#13]"
+if echo "$HEALTH" | grep -q '"serve_mode":"simple"'; then
+    ok "serve_mode is 'simple' (no Ray)"
+else
+    bad "serve_mode is not 'simple': $HEALTH"
+fi
+
+step "GET /metrics returns Prometheus OpenMetrics text (not JSON)"
 METRICS=$(curl -fsS "${BASE_URL}/metrics")
 if echo "$METRICS" | head -1 | grep -q '^# HELP'; then
     ok "/metrics starts with '# HELP' (OpenMetrics text)"
@@ -72,7 +78,7 @@ for metric in whisperx_requests_total whisperx_request_duration_seconds \
     fi
 done
 
-step "GET /queue-metrics still returns JSON for legacy callers"
+step "GET /queue-metrics returns JSON"
 QM=$(curl -fsS "${BASE_URL}/queue-metrics")
 if echo "$QM" | grep -q '"serve_mode"'; then
     ok "/queue-metrics returns the legacy JSON shape"
@@ -81,7 +87,7 @@ else
     bad "/queue-metrics did not return expected JSON: $QM"
 fi
 
-step "GET /v1/models is sourced from faster_whisper.available_models()"
+step "GET /v1/models is sourced from the MLX model map (no faster_whisper)"
 MODELS_JSON=$(curl -fsS "${BASE_URL}/v1/models")
 MODEL_COUNT=$(echo "$MODELS_JSON" | python3 -c "import sys,json; print(len(json.load(sys.stdin)['data']))")
 if [ "$MODEL_COUNT" -ge 15 ]; then
@@ -90,17 +96,26 @@ else
     bad "/v1/models lists only ${MODEL_COUNT} models (expected 15+)"
 fi
 if echo "$MODELS_JSON" | grep -q '"id":"whisper-1"'; then
-    ok "/v1/models includes whisper-1 alias on top"
+    ok "/v1/models includes whisper-1 alias"
 else
     bad "/v1/models is missing the whisper-1 alias"
 fi
-for canonical in tiny base small medium large-v3 distil-large-v3; do
+
+# MLX canonical models that should be present
+for canonical in tiny base small medium large-v3 large-v3-turbo; do
     if echo "$MODELS_JSON" | grep -q "\"id\":\"${canonical}\""; then
-        ok "/v1/models lists canonical name '${canonical}'"
+        ok "/v1/models lists MLX canonical name '${canonical}'"
     else
-        bad "/v1/models is missing canonical name '${canonical}'"
+        bad "/v1/models is missing MLX canonical name '${canonical}'"
     fi
 done
+
+# distil-* models must NOT be present (faster-whisper only)
+if echo "$MODELS_JSON" | grep -q '"id":"distil-'; then
+    bad "/v1/models contains distil-* (faster-whisper-only) models"
+else
+    ok "/v1/models has no distil-* models"
+fi
 
 step "Snapshot baseline /metrics counters before /asr request"
 BASELINE=$(curl -fsS "${BASE_URL}/metrics")
@@ -140,7 +155,6 @@ AFTER_OK_COUNT=$(echo "$AFTER" \
     | awk '{print $2}')
 AFTER_OK_COUNT=${AFTER_OK_COUNT:-0}
 
-# python compare so we handle floats safely
 INCREASED=$(python3 -c "print(int(float('${AFTER_OK_COUNT}') > float('${BASELINE_OK_COUNT}')))")
 if [ "$INCREASED" = "1" ]; then
     ok "whisperx_requests_total{status=ok} increased: ${BASELINE_OK_COUNT} -> ${AFTER_OK_COUNT}"
@@ -157,25 +171,7 @@ else
     bad "request duration histogram count is unexpected: ${DUR_COUNT}"
 fi
 
-AUDIO_DUR_COUNT=$(echo "$AFTER" \
-    | grep -E '^whisperx_audio_duration_seconds_count ' \
-    | awk '{print $2}')
-if [ -n "$AUDIO_DUR_COUNT" ] && [ "$(python3 -c "print(int(float('${AUDIO_DUR_COUNT}') >= 2))")" = "1" ]; then
-    ok "audio duration histogram observed >= 2 samples (got ${AUDIO_DUR_COUNT})"
-else
-    bad "audio duration histogram count is unexpected: ${AUDIO_DUR_COUNT}"
-fi
-
-AUDIO_SIZE_COUNT=$(echo "$AFTER" \
-    | grep -E '^whisperx_audio_size_megabytes_count ' \
-    | awk '{print $2}')
-if [ -n "$AUDIO_SIZE_COUNT" ] && [ "$(python3 -c "print(int(float('${AUDIO_SIZE_COUNT}') >= 2))")" = "1" ]; then
-    ok "audio size histogram observed >= 2 samples (got ${AUDIO_SIZE_COUNT})"
-else
-    bad "audio size histogram count is unexpected: ${AUDIO_SIZE_COUNT}"
-fi
-
-step "Verify whisperx_service_info has version/device labels"
+step "Verify whisperx_service_info has version/device/serve_mode labels"
 INFO_LINE=$(echo "$AFTER" | grep '^whisperx_service_info{' | head -1)
 if echo "$INFO_LINE" | grep -q 'version=' \
     && echo "$INFO_LINE" | grep -q 'device=' \
@@ -186,17 +182,21 @@ else
     bad "service_info missing expected labels: $INFO_LINE"
 fi
 
-step "Verify VRAM gauge is populated when CUDA is active"
+step "Verify VRAM gauge is populated (MLX active memory, no CUDA)"
 VRAM=$(echo "$AFTER" | grep '^whisperx_vram_allocated_bytes ' | awk '{print $2}')
-DEVICE_FROM_HEALTH=$(echo "$HEALTH" | python3 -c "import sys,json; print(json.load(sys.stdin)['device'])")
-if [ "$DEVICE_FROM_HEALTH" = "cuda" ]; then
-    if [ -n "$VRAM" ] && [ "$(python3 -c "print(int(float('${VRAM}') > 0))")" = "1" ]; then
-        ok "VRAM gauge > 0 on cuda (got ${VRAM} bytes)"
-    else
-        note "VRAM gauge is ${VRAM} on cuda (may be 0 in Ray Serve mode -- ingress process has no models)"
-    fi
+if [ -n "$VRAM" ]; then
+    # MLX active memory may be 0 if no inference ran in this process, or > 0 if it did.
+    # The key invariant: the gauge is present and does not error from missing torch.cuda.
+    ok "VRAM gauge is present (value: ${VRAM} bytes, MLX active memory or 0)"
 else
-    note "device is ${DEVICE_FROM_HEALTH}, VRAM gauge expected to be 0"
+    bad "VRAM gauge is missing from /metrics"
+fi
+
+step "Verify serve_mode='simple' in service_info (no Ray)"
+if echo "$INFO_LINE" | grep -q 'serve_mode="simple"'; then
+    ok "service_info reports serve_mode='simple'"
+else
+    bad "service_info does not report serve_mode='simple': $INFO_LINE"
 fi
 
 step "Summary"

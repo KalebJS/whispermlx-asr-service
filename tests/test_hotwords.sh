@@ -1,21 +1,23 @@
 #!/bin/bash
-# test_hotwords.sh - Test hotwords and initial_prompt features
+# test_hotwords.sh - Test hotwords (no-op under MLX) and initial_prompt features
 #
 # Usage:
 #   ./tests/test_hotwords.sh <audio_file>
-#   ./tests/test_hotwords.sh testfiles/recording.flac
+#   ./tests/test_hotwords.sh tests/testfiles/sample.wav
 #
-# The audio should contain domain-specific words that Whisper tends to
-# misspell (brand names, acronyms, unusual proper nouns). The script runs
-# three transcriptions and compares the output:
+# NOTE: hotwords is a NO-OP under the whispermlx MLX backend. The script
+# demonstrates that hotwords is accepted without error, and that
+# initial_prompt can steer transcription. The audio should contain
+# domain-specific words that Whisper tends to misspell (brand names,
+# acronyms, unusual proper nouns). The script runs three transcriptions:
 #   1. No hints (baseline)
-#   2. With hotwords only
-#   3. With hotwords + initial_prompt
+#   2. With hotwords (ignored by MLX, no error)
+#   3. With hotwords + initial_prompt (prompt applied)
 
 set -euo pipefail
 
 HOST=${HOST:-"localhost"}
-PORT=${PORT:-"9000"}
+PORT=${PORT:-"9001"}
 BASE_URL="http://${HOST}:${PORT}"
 HOTWORDS=${HOTWORDS:-"Speakr,CTranslate2,PyAnnote,SDRs"}
 INITIAL_PROMPT=${INITIAL_PROMPT:-"Speakr is a transcription app built on CTranslate2 and PyAnnote."}
@@ -25,7 +27,7 @@ if [ -z "${1:-}" ] || [ ! -f "${1:-}" ]; then
     echo ""
     echo "Environment variables:"
     echo "  HOST            Service host (default: localhost)"
-    echo "  PORT            Service port (default: 9000)"
+    echo "  PORT            Service port (default: 9001)"
     echo "  HOTWORDS        Comma-separated hotwords (default: Speakr,CTranslate2,PyAnnote,SDRs)"
     echo "  INITIAL_PROMPT  Prompt to steer the model (default: Speakr is a transcription app...)"
     exit 1
