@@ -1,227 +1,106 @@
-# WhisperX ASR API Service
+# Whispermlx ASR Service
 
-[![Version](https://img.shields.io/badge/version-0.3.2-blue.svg)](https://github.com/murtaza-nasir/whisperx-asr-service/releases/tag/v0.3.2)
+[![Version](https://img.shields.io/badge/version-0.4.0-blue.svg)](https://github.com/murtaza-nasir/whisperx-asr-service/releases/tag/v0.4.0)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Docker Build](https://github.com/murtaza-nasir/whisperx-asr-service/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/murtaza-nasir/whisperx-asr-service/actions/workflows/docker-publish.yml)
-[![Docker Pulls](https://img.shields.io/docker/pulls/learnedmachine/whisperx-asr-service)](https://hub.docker.com/r/learnedmachine/whisperx-asr-service)
-[![GPU Required](https://img.shields.io/badge/GPU-NVIDIA%20CUDA-76B900.svg)](https://developer.nvidia.com/cuda-zone)
+[![Platform: Apple Silicon](https://img.shields.io/badge/Platform-Apple%20Silicon%20%7C%20MLX-5856D6.svg)](https://github.com/ml-explore/mlx)
+[![Python: 3.13](https://img.shields.io/badge/Python-3.13-3776AB.svg)](https://www.python.org/downloads/)
 [![Status](https://img.shields.io/badge/status-alpha-orange.svg)](https://github.com/murtaza-nasir/whisperx-asr-service)
 
-**⚠️ Alpha Version - For Self-Hosting Enthusiasts**
+**A native Apple-Silicon ASR API service powered by [whispermlx](https://pypi.org/project/whispermlx/) (MLX) with FastAPI.**
 
-A simple ASR API service powered by WhisperX for transcription with speaker diarization. Built for self-hosters running [Speakr](https://github.com/murtaza-nasir/speakr) or similar applications.
-
-> **v0.3.2: two Docker image variants are now published per release.**
->
-> | Your GPU | Pull this tag |
-> |----------|---------------|
-> | **RTX 50xx (Blackwell)** | `learnedmachine/whisperx-asr-service:blackwell` (PyTorch 2.8.0 / cu128) |
-> | Anything else (10xx, 20xx, 30xx, 40xx, A-series, H-series) | `learnedmachine/whisperx-asr-service:latest` (PyTorch 2.7.1 / cu126) |
->
-> The `:latest` tag was previously broken on Pascal cards. v0.3.2 fixes this by re-pinning torch after the WhisperX install. See [Image Variants](#image-variants) and [Changelog](#changelog).
+Runs natively on macOS with Apple Silicon (M1/M2/M3/M4). MLX Whisper inference runs on the Metal GPU automatically. No CUDA, no Docker, no Ray Serve.
 
 ## What This Does
 
-- Transcribes audio files using OpenAI Whisper models
+- Transcribes audio files using OpenAI Whisper models via the MLX backend
 - Identifies speakers ("Who spoke when") using Pyannote.audio
-- Returns word-level timestamps
+- Returns word-level timestamps via wav2vec2 alignment
 - Supports 90+ languages
-- Outputs JSON, SRT, VTT, TSV formats
-- Runs on your own GPU hardware via Docker
+- Outputs JSON, SRT, VTT, TSV, and plain text formats
+- OpenAI-compatible API (`/v1/audio/transcriptions`, `/v1/audio/translations`, `/v1/models`)
+- Runs natively on Apple Silicon with `uv` and Python 3.13
 
 ## Limitations
 
 - **Not production-grade**: Basic error handling, no authentication
-- **GPU required**: Needs NVIDIA GPU with 14GB+ VRAM for large models
+- **Apple Silicon only**: Requires an M-series Mac. No NVIDIA/CUDA support.
 - **File size limits**: Large audio files (>1GB) can cause out-of-memory errors
-- **VRAM usage**: Memory consumption increases with file size and diarization
+- **Memory usage**: RAM consumption increases with file size and diarization. Peak ~2.3 GB for a small-model full pipeline on a 16 GB M1.
 - **Alpha software**: Expect bugs and breaking changes
 
 ## How It Works
 
 ```
-Audio --> Whisper (transcription) --> Wav2Vec2 (alignment) --> Pyannote (speaker ID) --> Output
+Audio --> MLX Whisper (transcription, Metal GPU) --> Wav2Vec2 (alignment) --> Pyannote (speaker ID) --> Output
 ```
 
-The service supports two serving modes:
+The service runs as a single-process uvicorn server with an async queue. Requests are serialized through a semaphore so only one pipeline runs on the Metal GPU at a time. This is suitable for single-device, low-traffic, or development use.
 
-- **Simple mode** (default): Single-process uvicorn with an async GPU queue. Requests are serialized through a semaphore so only one pipeline runs on the GPU at a time. Good for single-GPU, low-traffic, or development use.
-- **Ray Serve mode**: Runs on Ray Serve with cross-request batching (`@serve.batch`). Scales from 1 GPU to multi-GPU. Two pipeline strategies are available:
-  - **Replicate** (default): Each GPU runs the complete pipeline (Whisper + Align + Diarize). 4 GPUs = 4 independent pipeline replicas, no cross-GPU data transfer.
-  - **Split**: Each stage runs as a separate deployment with fractional GPU allocation. Useful when you want independent scaling per stage.
+**Device semantics:** MLX Whisper ASR always runs on the Metal GPU automatically. The `DEVICE` environment variable (default `cpu`) only controls where the VAD, wav2vec2 alignment, and pyannote diarization (torch-based stages) run. `COMPUTE_TYPE` and `BATCH_SIZE` are accepted for API compatibility but have no effect on the MLX backend.
 
 ## Prerequisites
 
 ### Hardware Requirements
 
-GPU memory requirements vary by model size:
+- **Apple Silicon Mac** (M1, M2, M3, or M4)
+- **RAM:** 16 GB recommended (8 GB may work with `tiny`/`base` models)
+- **Storage:** 50 GB SSD for model caching
 
-| Whisper Model | VRAM Required (with diarization) | Suitable GPUs |
-|---------------|----------------------------------|---------------|
-| tiny, base | ~4-5GB | RTX 3060 8GB, RTX 2060, GTX 1660 Ti |
-| small | ~6GB | RTX 3060, RTX 2070, RTX 2080 |
-| medium | ~10GB | RTX 3080, RTX 3060 12GB, RTX 2080 Ti |
-| large-v2, large-v3 | ~14GB | **RTX 3090**, RTX 4090, A6000, A100 |
+Memory requirements vary by model size:
 
-*Note: Measured with preloaded model + alignment + pyannote community-1 diarization on RTX 3090*
+| Whisper Model | RAM (full pipeline*) | Notes |
+|---------------|----------------------|-------|
+| `tiny`, `base` | ~2 GB | Fast, low quality |
+| `small` | ~2.3 GB | Good balance of speed and quality |
+| `medium` | ~5 GB | Good quality, slower |
+| `large-v3` | ~10+ GB | Best quality, slowest |
 
-**Minimum Configuration (small/medium models):**
-- GPU: NVIDIA RTX 3060 (12GB VRAM) or better
-- CPU: 8+ cores
-- RAM: 16GB
-- Storage: 50GB SSD
-
-**Recommended (large-v3 with diarization):**
-- GPU: NVIDIA RTX 3090 (24GB VRAM) or RTX 4090
-- CPU: 12+ cores
-- RAM: 32GB
-- Storage: 100GB SSD
+*Full pipeline = Whisper model + alignment model + pyannote speaker diarization. Measured on M1 16 GB.
 
 ### Software Requirements
 
-- **Docker** and **Docker Compose**
-- **NVIDIA Docker Runtime** (for GPU support)
+- **macOS** with Apple Silicon
+- **[uv](https://docs.astral.sh/uv/)** (Python package manager)
+- **Python 3.13** (installed via uv; system Python 3.14 is incompatible with whispermlx)
+- **FFmpeg** (for audio decoding; `brew install ffmpeg`)
 - **Hugging Face Account** (for speaker diarization models)
 
-## Image Variants
+## Quick Start
 
-Two prebuilt Docker images are published per release. They differ only in the
-PyTorch wheel they ship; the application code is identical.
-
-| Tag | PyTorch | CUDA wheels | Supported GPUs |
-|-----|---------|-------------|----------------|
-| `:latest`, `:vX.Y.Z` | 2.7.1 | cu126 | Pascal (10xx) through Hopper. Compatible with the broadest GPU range. |
-| `:blackwell`, `:vX.Y.Z-blackwell` | 2.8.0 | cu128 | Blackwell (RTX 50xx). Drops Pascal/Maxwell support per the PyTorch 2.8 cuDNN/CUDA 12.8 build. |
-
-If you have an RTX 50xx, use the `-blackwell` tag. Everyone else: use `:latest`.
-
-To build a custom variant locally, override the build args:
+### 1. Install uv and Set Up Python 3.13
 
 ```bash
-docker build \
-  --build-arg TORCH_VERSION=2.7.1 \
-  --build-arg TORCH_INDEX_URL=https://download.pytorch.org/whl/cu126 \
-  -t whisperx-asr-service:custom .
+# Install uv (if not already installed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Clone the repository
+git clone https://github.com/murtaza-nasir/whisperx-asr-service.git
+cd whisperx-asr-service
+
+# Create a Python 3.13 virtual environment and install dependencies
+uv venv --python 3.13
+uv sync
 ```
 
-## Quick Start (Prebuilt Image)
-
-Get up and running in 3 steps using the prebuilt Docker image:
-
-### 1. Get Hugging Face Token and Model Access
+### 2. Get Hugging Face Token (for Speaker Diarization)
 
 Speaker diarization requires a Hugging Face token and model access:
 
-**a) Create Hugging Face Account:**
-- Visit: [https://huggingface.co/join](https://huggingface.co/join) and sign up
+**a) Create a Hugging Face Account:**
+- Visit [https://huggingface.co/join](https://huggingface.co/join) and sign up
 
-**b) Accept Model User Agreements (ALL REQUIRED):**
+**b) Accept the Model User Agreement:**
+- [pyannote/speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1) - Click "Agree and access repository"
 
-You need to accept agreements for all three models:
-1. [pyannote/speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1) - Click "Agree and access repository"
-2. [pyannote/segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0) - Click "Agree and access repository"
-3. [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) - Click "Agree and access repository"
-
-**c) Generate Access Token:**
-- Visit: [https://huggingface.co/settings/tokens](https://huggingface.co/settings/tokens)
-- Click "New token", name it (e.g., "whisperx-diarization")
+**c) Generate an Access Token:**
+- Visit [https://huggingface.co/settings/tokens](https://huggingface.co/settings/tokens)
+- Click "New token", name it (e.g., "whispermlx-diarization")
 - Select "Read" permission and generate
 - Copy the token (starts with `hf_...`)
 
-⚠️ **Important:** Without accepting all model agreements, you'll get "403 Access Denied" errors.
+> Without the token and accepted agreement, diarization is gracefully skipped and transcription still works, but no speaker labels will be assigned.
 
-### 2. Create Configuration File
-
-Create a `.env` file with your Hugging Face token:
-
-```bash
-# Create .env file
-cat > .env << 'EOF'
-HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-DEVICE=cuda
-COMPUTE_TYPE=float16
-BATCH_SIZE=16
-PRELOAD_MODEL=large-v3
-MAX_FILE_SIZE_MB=1000
-# Serve mode: simple (default) or ray (Ray Serve with batching)
-SERVE_MODE=simple
-EOF
-```
-
-Replace `hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx` with your actual token.
-
-### 3. Run with Docker Compose (Recommended)
-
-Download the docker-compose.yml file and start the service:
-
-```bash
-# Download docker-compose.yml
-curl -O https://raw.githubusercontent.com/murtaza-nasir/whisperx-asr-service/main/docker-compose.yml
-
-# RTX 50xx (Blackwell) only: switch to the blackwell image
-# sed -i 's|whisperx-asr-service:latest|whisperx-asr-service:blackwell|' docker-compose.yml
-
-# Start the service (pulls prebuilt image automatically)
-docker compose up -d
-
-# Check logs
-docker compose logs -f
-```
-
-The bundled `docker-compose.yml` uses `:latest` (PyTorch 2.7.1 / cu126),
-which works on every NVIDIA card from Pascal through Hopper. RTX 50xx
-users should swap to `:blackwell` (PyTorch 2.8.0 / cu128). See
-[Image Variants](#image-variants) for the full matrix.
-
-**Or run with Docker command:**
-
-```bash
-# Pick the right tag for your GPU:
-IMAGE=learnedmachine/whisperx-asr-service:latest      # 10xx-40xx, A/H-series
-# IMAGE=learnedmachine/whisperx-asr-service:blackwell # RTX 50xx only
-
-docker run -d \
-  --name whisperx-asr-api \
-  --gpus all \
-  -p 9000:9000 \
-  -e DEVICE=cuda \
-  -e COMPUTE_TYPE=float16 \
-  -e BATCH_SIZE=16 \
-  -e HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx \
-  -e PRELOAD_MODEL=large-v3 \
-  -v whisperx-cache:/.cache \
-  --restart unless-stopped \
-  "$IMAGE"
-```
-
-The service will be available at `http://localhost:9000`
-
-### 4. Test the Service
-
-```bash
-# Health check
-curl http://localhost:9000/health
-
-# Test transcription
-curl -X POST http://localhost:9000/asr \
-  -F "audio_file=@your_audio.mp3" \
-  -F "language=en"
-```
-
----
-
-## Build from Source (Advanced)
-
-For development or if you want to build from source:
-
-### 1. Clone Repository
-
-```bash
-git clone https://github.com/murtaza-nasir/whisperx-asr-service.git
-cd whisperx-asr-service
-```
-
-### 2. Set Up Environment
+### 3. Configure Environment
 
 ```bash
 # Copy example environment file
@@ -231,41 +110,52 @@ cp .env.example .env
 nano .env
 ```
 
-### 3. Build and Run
-
-**Using docker-compose.dev.yml (with live code mounting):**
+Minimal `.env`:
 
 ```bash
-# Build and start
-docker compose -f docker-compose.dev.yml up -d --build
-
-# Check logs
-docker compose -f docker-compose.dev.yml logs -f
+HF_TOKEN=hf_your_token_here
+DEVICE=cpu
+PRELOAD_MODEL=large-v3
+PORT=9001
 ```
 
-**Or build manually:**
+### 4. Run the Service
 
 ```bash
-# Build image
-docker build -t whisperx-asr-service .
+# Start the service (loads .env automatically via entrypoint.sh)
+./entrypoint.sh
 
-# Run container
-docker run -d \
-  --name whisperx-asr-api \
-  --gpus all \
-  -p 9000:9000 \
-  --env-file .env \
-  -v whisperx-cache:/.cache \
-  whisperx-asr-service
+# Or start directly with uvicorn
+uv run uvicorn app.main:app --host 127.0.0.1 --port 9001
 ```
 
-**Note:** The `docker-compose.dev.yml` file mounts `./app` directory for live code changes without rebuilding.
+The service will be available at `http://localhost:9001`.
+
+> Port 9001 is the default. Port 9000 may be in use by other services (e.g., php-fpm on some macOS setups). The reserved port range for this service is 9001-9010.
+
+### 5. Test the Service
+
+```bash
+# Health check
+curl http://localhost:9001/health
+
+# Test transcription
+curl -X POST http://localhost:9001/asr \
+  -F "audio_file=@your_audio.mp3" \
+  -F "language=en"
+```
+
+A smoke test script is included:
+
+```bash
+./test-api.sh localhost 9001 path/to/audio.wav
+```
 
 ---
 
 ## API Documentation
 
-Once running, visit http://localhost:9000/docs for interactive API documentation.
+Once running, visit `http://localhost:9001/docs` for interactive API documentation.
 
 ### Main Endpoint: POST /asr
 
@@ -276,20 +166,23 @@ Once running, visit http://localhost:9000/docs for interactive API documentation
 | `audio_file` | File | Required | Audio file to transcribe |
 | `task` | String | `transcribe` | Task type: `transcribe` or `translate` |
 | `language` | String | Auto-detect | Language code (e.g., `en`, `es`, `fr`) |
-| `model` | String | `large-v3` | Whisper model: `tiny`, `base`, `small`, `medium`, `large-v2`, `large-v3` |
+| `model` | String | `large-v3` | Whisper model (see [Model Selection](#model-selection)) |
 | `initial_prompt` | String | None | Context or spelling guide to steer the model |
-| `hotwords` | String | None | Comma-separated words to bias transcription toward |
+| `hotwords` | String | None | Accepted but **ignored** by the MLX backend (see [Hotwords](#hotwords-no-op)) |
 | `output_format` | String | `json` | Output format: `json`, `text`, `srt`, `vtt`, `tsv` |
+| `output` | String | None | Legacy alias for `output_format` |
 | `word_timestamps` | Boolean | `true` | Return word-level timestamps |
 | `diarize` | Boolean | `true` | Enable speaker diarization |
-| `num_speakers` | Integer | Auto | Exact number of speakers (if known, overrides min/max) |
+| `enable_diarization` | Boolean | None | Alias for `diarize` |
+| `num_speakers` | Integer | Auto | Exact number of speakers (overrides min/max) |
 | `min_speakers` | Integer | Auto | Minimum number of speakers |
 | `max_speakers` | Integer | Auto | Maximum number of speakers |
+| `return_speaker_embeddings` | Boolean | `false` | Return 256-dimensional speaker embedding vectors |
 
 **Example Request (JSON output):**
 
 ```bash
-curl -X POST http://localhost:9000/asr \
+curl -X POST http://localhost:9001/asr \
   -F "audio_file=@meeting.mp3" \
   -F "language=en" \
   -F "model=large-v3" \
@@ -302,7 +195,7 @@ curl -X POST http://localhost:9000/asr \
 **Example Request (SRT subtitles):**
 
 ```bash
-curl -X POST http://localhost:9000/asr \
+curl -X POST http://localhost:9001/asr \
   -F "audio_file=@video.mp4" \
   -F "language=en" \
   -F "output_format=srt" \
@@ -310,6 +203,8 @@ curl -X POST http://localhost:9000/asr \
 ```
 
 **Example Response (JSON):**
+
+The `text` field is a JSON array mirroring the `segments` array (legacy drop-in shape from the original whisper-asr-webservice):
 
 ```json
 {
@@ -331,369 +226,110 @@ curl -X POST http://localhost:9000/asr \
 }
 ```
 
-### Advanced Speaker Diarization Features
+### Hotwords (No-Op)
 
-#### Exact Speaker Count
+The `hotwords` parameter is **accepted for API compatibility but is a no-op on the MLX backend**. The `whispermlx` library has no hotwords mechanism. When you supply `hotwords`, the service logs a warning (`"hotwords is ignored by the MLX backend"`) and proceeds with normal transcription. The parameter never causes an error.
 
-When you know the exact number of speakers, use `num_speakers` for more accurate diarization:
+To bias transcription toward specific spellings, use `initial_prompt` instead, which provides context that primes the model to expect certain terms:
 
 ```bash
-curl -X POST http://localhost:9000/asr \
+# Use initial_prompt to guide spelling
+curl -X POST "http://localhost:9001/asr?language=en&initial_prompt=Speakr+is+a+transcription+app." \
+  -F "audio_file=@meeting.mp3"
+```
+
+### Speaker Diarization
+
+Speaker diarization assigns `SPEAKER_NN` labels to segments and words. It is enabled by default when `HF_TOKEN` is set.
+
+**Requirements:**
+- `HF_TOKEN` must be set in your `.env` file
+- You must have accepted the model agreement for [pyannote/speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1)
+
+**When `HF_TOKEN` is missing or diarization fails:** The service gracefully skips diarization and returns the transcription without speaker labels (HTTP 200, no crash). This ensures transcription is never blocked by a missing token.
+
+**Exact Speaker Count:**
+
+```bash
+curl -X POST http://localhost:9001/asr \
   -F "audio_file=@interview.mp3" \
   -F "num_speakers=2" \
   -F "diarize=true"
 ```
 
-This overrides `min_speakers` and `max_speakers` and typically provides better accuracy than range-based detection.
+`num_speakers` overrides `min_speakers` and `max_speakers`.
 
-#### Exclusive Speaker Diarization
-
-This service automatically uses **exclusive speaker diarization** when available from the pyannote community-1 model. This feature simplifies reconciliation between fine-grained speaker diarization timestamps and transcription timestamps, making it ideal for applications like [Speakr](https://github.com/murtaza-nasir/speakr) where you need to align transcripts with speaker segments.
-
-**Benefits:**
-- More accurate timestamp alignment between speakers and words
-- Better handling of speaker transitions
-- Simplified post-processing for multi-speaker transcripts
-
-### Custom Vocabulary (Hotwords)
-
-Whisper often misspells brand names, acronyms, and domain-specific terms. You can improve accuracy using `hotwords` and `initial_prompt`:
-
-- `hotwords` biases the model's beam search to favor specific words during decoding
-- `initial_prompt` provides a sentence of context that primes the model to expect certain spellings
-
-**Example:** transcribing audio that says *"We deployed Speakr on a Kubernetes cluster using CTranslate2 for inference. PyAnnote handles the diarization."*
+**Speaker Embeddings:**
 
 ```bash
-# Baseline (no hints)
-curl -X POST "http://localhost:9000/asr?language=en" \
-  -F "audio_file=@meeting.mp3"
-# Result: "We deployed Speaker...using ctranslate2...PnNote handles the diarization."
-
-# With hotwords
-curl -X POST "http://localhost:9000/asr?language=en&hotwords=Speakr,CTranslate2,PyAnnote" \
-  -F "audio_file=@meeting.mp3"
-# Result: "We deployed Speaker...using CTranslate2...PyAnnote handles the diarization."
-
-# With hotwords + initial_prompt (best results)
-curl -X POST "http://localhost:9000/asr?language=en&hotwords=Speakr,CTranslate2,PyAnnote&initial_prompt=Speakr is a transcription app." \
-  -F "audio_file=@meeting.mp3"
-# Result: "We deployed Speakr...using CTranslate2...PyAnnote handles the diarization."
+curl -X POST http://localhost:9001/asr \
+  -F "audio_file=@meeting.mp3" \
+  -F "return_speaker_embeddings=true" \
+  -F "diarize=true"
 ```
 
-| Word | No hints | Hotwords | Hotwords + initial_prompt |
-|---|---|---|---|
-| CTranslate2 | ctranslate2 | CTranslate2 | CTranslate2 |
-| PyAnnote | PnNote | PyAnnote | PyAnnote |
-| Speakr | Speaker | Speaker | Speakr |
+Returns a `speaker_embeddings` object keyed by speaker label, with one numeric vector per detected speaker. Embeddings are only included in `json` output format.
 
-`hotwords` alone fixes most spelling issues. Words that sound identical to common English words (like "Speakr" vs "Speaker") may need `initial_prompt` as well to provide enough context for the model to override its default.
+### OpenAI-Compatible Endpoints
 
-The OpenAI-compatible endpoints (`/v1/audio/transcriptions`) also support a `hotwords` form field. If only `prompt` is provided, it is used as hotwords.
+The service provides drop-in OpenAI API compatibility:
 
-A test script is included to verify hotwords with your own audio:
+#### POST /v1/audio/transcriptions
 
 ```bash
-./tests/test_hotwords.sh testfiles/your_audio.flac
-
-# Custom hotwords
-HOTWORDS="MyBrand,TechTerm" INITIAL_PROMPT="MyBrand is a product." \
-  ./tests/test_hotwords.sh testfiles/your_audio.flac
+curl -X POST http://localhost:9001/v1/audio/transcriptions \
+  -F "file=@audio.mp3" \
+  -F "model=whisper-1"
 ```
 
-## Integration with Speakr
+Supports `response_format`: `json` (default, returns `{"text": "..."}`), `text`, `srt`, `vtt`, `verbose_json` (full object with segments, optional word timestamps via `timestamp_granularities[]`).
 
-To use this service with [Speakr](https://github.com/murtaza-nasir/speakr) instead of the default ASR endpoint:
+The `model` field accepts OpenAI-style aliases (`whisper-1`, `whisper-tiny`, `whisper-large-v3`) and raw MLX model names (`tiny`, `base`, `large-v3-turbo`, etc.).
 
-### If Running on the Same Machine
-
-Update Speakr's `.env` file:
+#### POST /v1/audio/translations
 
 ```bash
-# Enable ASR endpoint
-USE_ASR_ENDPOINT=true
-
-# Point to WhisperX service
-ASR_BASE_URL=http://whisperx-asr-api:9000
+curl -X POST http://localhost:9001/v1/audio/translations \
+  -F "file=@spanish_audio.mp3" \
+  -F "model=whisper-1"
 ```
 
-If Speakr and WhisperX are in the same Docker Compose stack, use the container name. Otherwise, use `http://localhost:9000`.
+Translates non-English audio into English text. Same response formats as transcriptions. `verbose_json` reports `task: "translate"`.
 
-### If Running on a Different GPU Machine
-
-1. **On GPU Machine:** Deploy this service
+#### GET /v1/models
 
 ```bash
-# Make service accessible from network
-# Edit docker compose.yml ports:
-ports:
-  - "0.0.0.0:9000:9000"  # Expose to network
+curl http://localhost:9001/v1/models
 ```
 
-2. **On Speakr Machine:** Update configuration
+Returns an OpenAI-style list of available models, built from the MLX model map. Includes the `whisper-1` alias and all canonical MLX model names.
+
+#### GET /v1/models/{model_id}
 
 ```bash
-# In Speakr's .env file
-USE_ASR_ENDPOINT=true
-ASR_BASE_URL=http://<GPU_MACHINE_IP>:9000
+curl http://localhost:9001/v1/models/large-v3
 ```
 
-**Note:** Replace `<GPU_MACHINE_IP>` with your GPU server's IP address. Use firewall rules to restrict access to trusted machines only.
+Returns the matching model object, or a 404 OpenAI error for unknown ids.
 
-## Configuration
-
-### Environment Variables
-
-Edit `.env` to customize:
+### Health and Metrics
 
 ```bash
-# GPU or CPU processing
-DEVICE=cuda              # cuda for GPU, cpu for CPU-only
+# Health check
+curl http://localhost:9001/health
+# {"status": "healthy", "device": "cpu", "loaded_models": ["large-v3"], "serve_mode": "simple"}
 
-# Computation precision
-COMPUTE_TYPE=float16     # float16 (GPU), float32 (CPU), int8 (faster, lower quality)
+# Root endpoint
+curl http://localhost:9001/
 
-# Batch size (higher = faster but more memory). Default is device-aware:
-# 16 on cuda, 2 on cpu. Long audio on CPU benefits from BATCH_SIZE=1.
-BATCH_SIZE=16           # 16 for 8GB VRAM, 32+ for high-end GPUs, 1-2 on CPU
+# Prometheus metrics
+curl http://localhost:9001/metrics
 
-# Hugging Face token for diarization
-HF_TOKEN=hf_xxx...
-
-# Model preloading (optional, reduces first-request latency)
-PRELOAD_MODEL=large-v3   # Leave empty to disable, or set to: tiny, base, small, medium, large-v2, large-v3
-
-# Maximum file size in MB (prevents out-of-memory errors)
-MAX_FILE_SIZE_MB=1000    # Default 1GB, adjust lower for GPUs with <16GB VRAM
-
-# Idle model eviction (default disabled). When > 0, Whisper models that have
-# not served a request in this many seconds are unloaded from memory by a
-# background sweep. The next request that needs the model will reload it.
-MODEL_KEEP_ALIVE_SECONDS=0          # 0 disables eviction; e.g. 3600 = 1 hour
-MODEL_EVICTION_INTERVAL_SECONDS=60  # Sweep frequency (floor of 30 seconds)
+# Queue metrics (JSON)
+curl http://localhost:9001/queue-metrics
 ```
 
-### Serve Mode
-
-Controlled by the `SERVE_MODE` environment variable in your `.env` file.
-
-#### Simple Mode (default)
-
-```bash
-SERVE_MODE=simple
-```
-
-Runs uvicorn directly. Requests are serialized through an async GPU semaphore so the event loop stays responsive while GPU work runs in a thread pool. This is backward-compatible with previous versions.
-
-You can tune `GPU_CONCURRENCY=1` (default) to control how many pipeline runs execute concurrently. Leave at 1 for single-GPU setups.
-
-#### Ray Serve Mode
-
-```bash
-SERVE_MODE=ray
-```
-
-Runs on Ray Serve with cross-request batching (`@serve.batch`). Two pipeline strategies are available, controlled by `PIPELINE_STRATEGY`:
-
-##### Replicate Strategy (default, recommended)
-
-```bash
-PIPELINE_STRATEGY=replicate
-NUM_GPU_REPLICAS=4       # one full pipeline per GPU
-```
-
-Each GPU runs the complete 3-stage pipeline. Ray Serve routes incoming requests across replicas.
-
-```
-                    +-- GPU 0: [Whisper + Align + Diarize] --+
-HTTP --> Proxy -->  +-- GPU 1: [Whisper + Align + Diarize] --+--> Response
-                    +-- GPU 2: [Whisper + Align + Diarize] --+
-                    +-- GPU 3: [Whisper + Align + Diarize] --+
-```
-
-##### Split Strategy
-
-```bash
-PIPELINE_STRATEGY=split
-```
-
-Each pipeline stage runs as a separate deployment with fractional GPU allocation and cross-request batching (`@serve.batch`). Stage-level pipelining means request B can start transcription while request A is still in diarization.
-
-```
-HTTP --> Proxy --> ASR Ingress
-                       |
-              +--------+--------+
-              |        |        |
-          Whisper   Align    Diarize
-         (GPU 0.5) (GPU 0.3) (GPU 0.2)
-```
-
-##### Strategy Comparison
-
-Both strategies achieve similar throughput (~6.3-6.5x speedup on 4x RTX 3090 with 8 concurrent workers).
-
-| | Replicate | Split |
-|---|-----------|-------|
-| **Configuration** | Simple (just set `NUM_GPU_REPLICAS`) | Complex (GPU fractions, per-stage replicas, bin-packing tuning) |
-| **Cross-GPU transfer** | None (audio stays on one GPU) | Yes (results move between stages) |
-| **Tail latency** | Higher variance | Lower and more consistent |
-| **Scaling** | Add a GPU, add a replica | Scale bottleneck stages independently (e.g. more Whisper replicas) |
-| **VRAM per GPU** | Must fit all 3 models | Each stage uses a fraction |
-| **Best for** | Most setups, multi-GPU throughput | Advanced tuning, heterogeneous stage scaling |
-
-##### Ray Serve Configuration
-
-All optional, shown with defaults:
-
-```bash
-# Pipeline strategy: replicate (full pipeline per GPU) or split (stage per GPU)
-PIPELINE_STRATEGY=replicate
-
-# Number of pipeline replicas (set to number of GPUs)
-NUM_GPU_REPLICAS=1
-
-# Cross-request batch sizes per stage (tune for GPU VRAM)
-WHISPER_BATCH_SIZE=4
-ALIGN_BATCH_SIZE=8
-DIARIZE_BATCH_SIZE=2
-
-# Seconds to wait collecting a batch before processing what's available
-BATCH_WAIT_TIMEOUT=0.1
-
-# Split strategy only: fractional GPU allocation per stage
-WHISPER_GPU_FRACTION=0.5
-ALIGN_GPU_FRACTION=0.3
-DIARIZE_GPU_FRACTION=0.2
-
-# Split strategy only: per-stage replica overrides (fall back to NUM_GPU_REPLICAS)
-# WHISPER_NUM_REPLICAS=2
-# ALIGN_NUM_REPLICAS=1
-# DIARIZE_NUM_REPLICAS=1
-```
-
-##### Multi-GPU Examples
-
-```bash
-# 4 GPUs, full pipeline on each (recommended)
-SERVE_MODE=ray
-PIPELINE_STRATEGY=replicate
-NUM_GPU_REPLICAS=4
-
-# 3 GPUs, one stage per GPU
-SERVE_MODE=ray
-PIPELINE_STRATEGY=split
-WHISPER_GPU_FRACTION=1.0
-ALIGN_GPU_FRACTION=1.0
-DIARIZE_GPU_FRACTION=1.0
-
-# 4 GPUs, hybrid: 2 Whisper + 1 Align + 1 Diarize
-SERVE_MODE=ray
-PIPELINE_STRATEGY=split
-WHISPER_NUM_REPLICAS=2  WHISPER_GPU_FRACTION=1.0
-ALIGN_NUM_REPLICAS=1    ALIGN_GPU_FRACTION=1.0
-DIARIZE_NUM_REPLICAS=1  DIARIZE_GPU_FRACTION=1.0
-```
-
-When running in Ray mode, the Ray Dashboard is available at `http://localhost:8265` for monitoring deployments, replicas, and request metrics.
-
-##### GPU Pinning
-
-To restrict which GPUs the service uses, create a `docker-compose.dev.local.yml` override (gitignored):
-
-```yaml
-services:
-  whisperx-asr:
-    environment:
-      - CUDA_VISIBLE_DEVICES=0,1,2,3
-      - NUM_GPU_REPLICAS=4
-```
-
-Use `CUDA_VISIBLE_DEVICES` (not `NVIDIA_VISIBLE_DEVICES`) since the Docker Compose `deploy` section exposes all GPUs to the container.
-
-Then start with:
-
-```bash
-docker compose -f docker-compose.dev.yml -f docker-compose.dev.local.yml up -d
-```
-
-### Model Selection
-
-Available Whisper models (speed vs accuracy tradeoff):
-
-| Model | Parameters | VRAM (model only) | VRAM (full pipeline*) | Speed | Quality |
-|-------|------------|-------------------|----------------------|-------|---------|
-| `tiny` | 39M | ~1GB | ~4GB | Fastest | Lowest |
-| `base` | 74M | ~1GB | ~5GB | Very Fast | Low |
-| `small` | 244M | ~2GB | ~6GB | Fast | Medium |
-| `medium` | 769M | ~5GB | ~10GB | Moderate | Good |
-| `large-v2` | 1550M | ~10GB | ~14GB | Slow | Excellent |
-| `large-v3` | 1550M | ~10GB | ~14GB | Slow | Best |
-
-*Full pipeline = Whisper model + alignment model + pyannote speaker diarization (measured on RTX 3090)
-
-**Recommendation:**
-- Use `large-v3` for best quality (requires 16GB+ VRAM)
-- Use `small` or `medium` for speed/resource constraints (8-12GB VRAM)
-
-## Running the Service
-
-```bash
-# Start in simple mode (default)
-docker compose up -d
-
-# Or start in Ray Serve mode
-# Set SERVE_MODE=ray in your .env file, then:
-docker compose up -d
-
-# View logs
-docker compose logs -f
-```
-
-**Note:** When using Ray Serve mode, Docker Compose is configured with `shm_size: 8g` for Ray's shared memory object store. The Ray Dashboard is exposed on port 8265.
-
-## Monitoring and Logs
-
-### View Logs
-
-```bash
-# Real-time logs
-docker compose logs -f
-
-# Last 100 lines
-docker compose logs --tail=100
-
-# Specific container logs
-docker logs whisperx-asr-api
-```
-
-### Health Check
-
-```bash
-# Check service health
-curl http://localhost:9000/health
-
-# Response:
-{
-  "status": "healthy",
-  "device": "cuda",
-  "loaded_models": ["large-v3"],
-  "serve_mode": "ray"
-}
-```
-
-### Prometheus Metrics
-
-`GET /metrics` returns OpenMetrics text format suitable for a Prometheus
-scrape config:
-
-```bash
-curl http://localhost:9000/metrics
-# # HELP whisperx_requests_total Total HTTP requests by endpoint and status
-# # TYPE whisperx_requests_total counter
-# whisperx_requests_total{endpoint="/asr",status="ok"} 12.0
-# whisperx_request_duration_seconds_bucket{endpoint="/asr",le="60.0"} 11.0
-# ...
-```
+**Prometheus Metrics:**
 
 | Metric | Type | Notes |
 |--------|------|-------|
@@ -704,192 +340,239 @@ curl http://localhost:9000/metrics
 | `whisperx_model_evictions_total{model}` | Counter | Models unloaded by the idle-eviction sweep |
 | `whisperx_audio_duration_seconds` | Histogram | Submitted audio duration |
 | `whisperx_audio_size_megabytes` | Histogram | Submitted file size |
-| `whisperx_vram_allocated_bytes` | Gauge | CUDA `memory_allocated()` (0 on CPU) |
+| `whisperx_vram_allocated_bytes` | Gauge | MLX active memory (or 0) |
 | `whisperx_service_info` | Info | Static labels: version, device, compute_type, serve_mode |
 
-**Ray Serve caveat:** `/metrics` is served by the ingress process. Whisper
-models load inside replica processes, so `whisperx_loaded_models`,
-`whisperx_vram_allocated_bytes`, and `whisperx_model_evictions_total` will
-read 0 (or be missing) in Ray Serve mode. These counters and gauges are
-per-process; without `prometheus_client` multi-process mode the ingress'
-registry never sees the replica's events. HTTP-level metrics (request
-counts, durations, audio sizes) are accurate in both modes because they
-are recorded inside the ingress handler. Use the Ray Dashboard at port
-8265 for per-replica state, and tail `serve/replica_*` log files for
-eviction events. Multi-process metrics support is a planned follow-up.
+The `whisperx_vram_allocated_bytes` gauge reports MLX active memory via `mlx.core.get_active_memory()` when available, or 0 otherwise. No `torch.cuda` is used.
 
-In simple mode (`SERVE_MODE=simple`) all metrics including the eviction
-counter and loaded-model gauge work as expected, since the model cache
-and the `/metrics` handler share a process. Each Whisper model load
-pre-registers a `whisperx_model_evictions_total{model="<name>"} 0` row
-so dashboards can graph the metric from the first load onward, not only
-after the first eviction.
+---
 
-The legacy JSON shape (queue/loaded model state) is still available at
-`GET /queue-metrics` for callers that depended on it.
+## Model Selection
 
-### Performance Monitoring
+Available MLX Whisper models (speed vs accuracy tradeoff):
 
-Monitor GPU usage:
+| Model | Parameters | Speed | Quality |
+|-------|------------|-------|---------|
+| `tiny`, `tiny.en` | 39M | Fastest | Lowest |
+| `base`, `base.en` | 74M | Very Fast | Low |
+| `small`, `small.en` | 244M | Fast | Medium |
+| `medium`, `medium.en` | 769M | Moderate | Good |
+| `large`, `large-v1` | 1550M | Slow | Excellent |
+| `large-v2` | 1550M | Slow | Excellent |
+| `large-v3` | 1550M | Slow | Best |
+| `large-v3-turbo`, `turbo` | 809M | Fast | High |
+
+OpenAI-style aliases (`whisper-1`, `whisper-tiny`, `whisper-large-v3`, etc.) are also accepted and resolve to the corresponding MLX model.
+
+**Recommendation:**
+- Use `large-v3` for best quality
+- Use `small` or `base` for speed and lower memory usage
+- Use `large-v3-turbo` for a good balance of speed and quality
+
+Models are downloaded on first use and cached in `CACHE_DIR` (default `~/.cache/whisperx-asr`).
+
+---
+
+## Configuration
+
+### Environment Variables
+
+Edit `.env` to customize:
 
 ```bash
-# NVIDIA GPU stats
-nvidia-smi -l 1
+# Device for torch-based stages (VAD, alignment, diarization).
+# MLX Whisper ASR always runs on the Metal GPU regardless of this setting.
+DEVICE=cpu              # cpu (default) or mps (experimental)
 
-# Docker container stats
-docker stats whisperx-asr-api
+# Compute type and batch size (accepted but INERT under MLX — no effect on inference)
+#COMPUTE_TYPE=float16
+#BATCH_SIZE=16
 
-# Ray Dashboard (Ray mode only)
-# Open http://localhost:8265 in your browser
+# Hugging Face token for diarization (REQUIRED for speaker labels)
+HF_TOKEN=hf_xxx...
+
+# Model preloading (optional, reduces first-request latency)
+PRELOAD_MODEL=large-v3   # Leave empty to disable
+
+# Service port (default 9001)
+PORT=9001
+
+# Model cache directories
+CACHE_DIR=~/.cache/whisperx-asr
+HF_HOME=~/.cache/whisperx-asr
+
+# Maximum file size in MB (prevents out-of-memory errors)
+MAX_FILE_SIZE_MB=1000
+
+# GPU concurrency (Metal GPU semaphore; default 1)
+#GPU_CONCURRENCY=1
+
+# Maximum queued requests before rejecting with 503 (default 32)
+#MAX_QUEUE_SIZE=32
+
+# Idle model eviction (default disabled). When > 0, Whisper models that have
+# not served a request in this many seconds are unloaded from memory.
+#MODEL_KEEP_ALIVE_SECONDS=0
+#MODEL_EVICTION_INTERVAL_SECONDS=60
+
+# Offline mode (optional): set to 1 to prevent network requests after models are cached
+#HF_HUB_OFFLINE=1
 ```
+
+### Idle Model Eviction
+
+Set `MODEL_KEEP_ALIVE_SECONDS` to unload Whisper models that have been idle longer than the configured window. The next request that needs the model reloads it transparently:
+
+```bash
+MODEL_KEEP_ALIVE_SECONDS=3600          # unload models idle for 1 hour
+MODEL_EVICTION_INTERVAL_SECONDS=60     # sweep cadence (floor 30 seconds)
+```
+
+Default is `0` (disabled; models stay loaded).
+
+---
+
+## Integration with Speakr
+
+To use this service with [Speakr](https://github.com/murtaza-nasir/speakr):
+
+Update Speakr's `.env` file:
+
+```bash
+USE_ASR_ENDPOINT=true
+ASR_BASE_URL=http://localhost:9001
+```
+
+If the service is on a different machine, replace `localhost` with the IP address and ensure the port is accessible through your firewall.
+
+---
+
+## Running the Service
+
+```bash
+# Using entrypoint.sh (loads .env and starts uvicorn)
+./entrypoint.sh
+
+# Or directly with uvicorn
+uv run uvicorn app.main:app --host 127.0.0.1 --port 9001
+
+# With environment variables inline
+DEVICE=cpu PRELOAD_MODEL=base uv run uvicorn app.main:app --host 127.0.0.1 --port 9001
+
+# View logs (foreground)
+uv run uvicorn app.main:app --host 127.0.0.1 --port 9001
+```
+
+---
 
 ## Offline Use
 
-This service can run completely offline after an initial setup with internet access. This is useful for air-gapped environments or when you want to avoid network latency.
+The service can run completely offline after an initial setup with internet access:
 
-### Initial Setup (requires internet)
-
-1. Start the container with internet access
+1. Start the service with internet access
 2. Run at least one transcription request with diarization enabled to cache all models:
    ```bash
-   curl -X POST http://localhost:9000/asr \
+   curl -X POST http://localhost:9001/asr \
      -F "audio_file=@test.mp3" \
      -F "diarize=true"
    ```
-3. This downloads and caches:
-   - Whisper model (e.g., large-v3)
-   - Alignment model (wav2vec2)
-   - Pyannote speaker diarization models
-
-### Enable Offline Mode
-
-Add `HF_HUB_OFFLINE=1` to your `docker-compose.yml` environment section:
-
-```yaml
-environment:
-  - HF_HUB_OFFLINE=1
-  # ... other environment variables
-```
-
-**Important:** This must be set directly in `docker-compose.yml`, not in the `.env` file.
-
-Then restart the container:
-```bash
-docker compose down && docker compose up -d
-```
+3. Set `HF_HUB_OFFLINE=1` in your `.env` file
+4. Restart the service
 
 The service will now operate without any network requests to Hugging Face.
 
-### What Gets Cached
+---
 
-| Component | Cache Location | Notes |
-|-----------|---------------|-------|
-| Whisper models | `/.cache/models--Systran--faster-whisper-*` | Downloaded on first use |
-| Alignment model | `/.cache/wav2vec2_*.pth` | Downloaded on first alignment |
-| Pyannote models | `/.cache/huggingface/hub/models--pyannote--*` | Downloaded on first diarization |
-| NLTK tokenizers | `/.cache/nltk_data/` | Pre-downloaded in Docker image |
+## Monitoring and Logs
 
-### Troubleshooting Offline Mode
+### View Logs
 
-If you see errors like `Failed to resolve 'huggingface.co'`:
-1. Ensure you ran a full transcription with diarization while online
-2. Verify `HF_HUB_OFFLINE=1` is set in `docker-compose.yml` (not `.env`)
-3. Check the cache volume contains the models: `docker exec whisperx-asr-api ls -la /.cache/huggingface/hub/`
+When running in the foreground, logs appear in the terminal. When running in the background:
 
-## Troubleshooting
-
-### GPU Not Detected
-
-**Symptom:** Service runs on CPU despite having GPU
-
-**Solution:**
 ```bash
-# Verify NVIDIA Docker runtime
-docker run --rm --gpus all nvidia/cuda:12.1.1-base-ubuntu22.04 nvidia-smi
-
-# If fails, install nvidia-container-toolkit
-distribution=$(. /etc/os-release;echo $ID$VERSION_ID)
-curl -s -L https://nvidia.github.io/nvidia-docker/gpgkey | sudo apt-key add -
-curl -s -L https://nvidia.github.io/nvidia-docker/$distribution/nvidia-docker.list | \
-  sudo tee /etc/apt/sources.list.d/nvidia-docker.list
-sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit
-sudo systemctl restart docker
+# If started via entrypoint.sh in the background
+./entrypoint.sh &> service.log &
+tail -f service.log
 ```
 
-### Out of Memory Errors
+### Health Check
 
-**Symptom:** `CUDA out of memory` errors or VRAM exhaustion with large files
+```bash
+curl http://localhost:9001/health
+# {"status": "healthy", "device": "cpu", "loaded_models": ["large-v3"], "serve_mode": "simple"}
+```
 
-**Solutions:**
-1. **Reduce file size limit** in `.env`: `MAX_FILE_SIZE_MB=500` (default is 1000MB)
-2. **Use smaller model**: `small` or `medium` instead of `large-v3`
-3. **Reduce batch size** in `.env`: `BATCH_SIZE=8` or `BATCH_SIZE=4`
-4. **Use int8 precision**: `COMPUTE_TYPE=int8` (lower quality but less memory)
-5. **Split large files**: Process audio in smaller chunks before uploading
-6. **Disable diarization**: For very large files, skip speaker diarization
+---
 
-**Note:** The service automatically clears GPU cache between operations to minimize VRAM buildup, but very large files (>500MB) can still cause issues.
+## Supported Audio Formats
+
+The service supports formats decodable by FFmpeg:
+
+- **Audio:** MP3, WAV, M4A, FLAC, AAC, OGG, WMA
+- **Video:** MP4, AVI, MOV, MKV, WebM (audio track extracted)
+- **Other:** AMR, 3GP, 3GPP
+
+---
+
+## Troubleshooting
 
 ### Speaker Diarization Not Working
 
 **Symptom:** No speaker labels in output
 
 **Solutions:**
-1. Verify HF_TOKEN is set correctly
-2. Accept model user agreements on Hugging Face
-3. Check logs for diarization errors: `docker compose logs`
-4. Ensure `diarize=true` in request
+1. Verify `HF_TOKEN` is set correctly in `.env`
+2. Accept the model agreement at [pyannote/speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1)
+3. Check logs for diarization errors
+4. Ensure `diarize=true` in request (diarization defaults to true when `HF_TOKEN` is set)
+
+> Without `HF_TOKEN`, diarization is silently skipped and transcription proceeds without speaker labels.
+
+### Out of Memory Errors
+
+**Solutions:**
+1. Reduce `MAX_FILE_SIZE_MB` in `.env`
+2. Use a smaller model (`small` or `base` instead of `large-v3`)
+3. Disable diarization for very large files: `diarize=false`
+4. Split large audio files into smaller chunks before uploading
 
 ### Slow Processing
 
-**Symptom:** Transcription takes too long
-
 **Solutions:**
-1. Use GPU instead of CPU (`DEVICE=cuda`)
-2. Use smaller model for faster processing
-3. Increase `BATCH_SIZE` (if you have VRAM)
-4. Disable diarization if not needed: `diarize=false`
-
-### PyTorch 2.6 Weights Loading Error
-
-**Symptom:** Error message containing `Weights only load failed` or `GLOBAL omegaconf.listconfig.ListConfig was not an allowed global`
-
-This occurs due to a security change in PyTorch 2.6 where `weights_only=True` became the default for `torch.load()`.
-
-**Solution:**
-
-Add this environment variable to your `docker-compose.yml`:
-
-```yaml
-environment:
-  - TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=true
-```
-
-**Important:** Setting this in `.env` file alone may not work - it must be set directly in `docker-compose.yml` under the `environment` section.
-
-See [WhisperX Issue #1304](https://github.com/m-bain/whisperX/issues/1304) for more details.
+1. Use a smaller model for faster processing
+2. Disable diarization if not needed: `diarize=false`
+3. Use `large-v3-turbo` for a good speed/quality balance
 
 ### API Returns 500 Errors
 
-**Check logs:**
+Check logs for error details. Common causes:
+- Invalid audio format (use FFmpeg to convert)
+- Model download failure (check internet access)
+- Incorrect parameters (check API docs at `/docs`)
+
+---
+
+## Stress Testing
+
+A stress test script is included to measure throughput and latency under concurrent load:
+
 ```bash
-docker compose logs whisperx-asr
+# Default: 4 concurrent workers, all files in testfiles/
+uv run python tests/stress_test.py
+
+# 8 concurrent workers, 3 rounds
+uv run python tests/stress_test.py --workers 8 --rounds 3
+
+# Test OpenAI-compat endpoint
+uv run python tests/stress_test.py --endpoint openai
+
+# Without diarization
+uv run python tests/stress_test.py --no-diarize
 ```
 
-Common causes:
-- Invalid audio format (use ffmpeg to convert)
-- Model not loaded (check VRAM, logs)
-- Incorrect parameters (check API docs)
+Place audio files in the `tests/testfiles/` directory (gitignored).
 
-## Supported Audio Formats
-
-The service supports formats that WhisperX can process (via FFmpeg):
-
-- **Audio:** MP3, WAV, M4A, FLAC, AAC, OGG, WMA
-- **Video:** MP4, AVI, MOV, MKV, WebM (audio track extracted)
-- **Other:** AMR, 3GP, 3GPP
-
-**Note:** Large files (>1GB) may cause out-of-memory errors as files are loaded entirely into memory.
+---
 
 ## Security Notes
 
@@ -898,72 +581,9 @@ The service supports formats that WhisperX can process (via FFmpeg):
 If exposing to a network:
 - Use firewall rules to restrict access
 - Consider putting behind a reverse proxy
-- Store HF_TOKEN securely (use `.env` file, not hardcoded)
+- Store `HF_TOKEN` securely in the `.env` file (never hardcode)
 
-## Maintenance
-
-### Updating WhisperX
-
-If you run the prebuilt image, pull the new tag:
-
-```bash
-docker compose pull
-docker compose up -d
-```
-
-If you build from source, the default build now installs PyTorch 2.7.1
-from the cu126 wheel index (Pascal-Hopper). To target a different combo:
-
-```bash
-git pull
-docker compose build --no-cache \
-  --build-arg TORCH_VERSION=2.8.0 \
-  --build-arg TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128
-docker compose up -d
-```
-
-Build args also work via Compose's `build.args` if you check that into
-your overlay file.
-
-### Clearing Cache
-
-```bash
-# Remove model cache
-docker compose down -v
-docker volume rm whisperx-asr-service_whisperx-cache
-
-# Rebuild
-docker compose up -d
-```
-
-### Backup
-
-Backup the cache volume to preserve downloaded models:
-
-```bash
-docker run --rm -v whisperx-asr-service_whisperx-cache:/cache \
-  -v $(pwd):/backup ubuntu tar czf /backup/whisperx-cache-backup.tar.gz /cache
-```
-
-## Stress Testing
-
-A stress test script is included to measure throughput and latency under concurrent load:
-
-```bash
-# Default: 4 concurrent workers, all files in testfiles/
-python tests/stress_test.py
-
-# 8 concurrent workers, 3 rounds
-python tests/stress_test.py --workers 8 --rounds 3
-
-# Test OpenAI-compat endpoint
-python tests/stress_test.py --endpoint openai
-
-# Without diarization
-python tests/stress_test.py --no-diarize
-```
-
-Place `.mp3` files in the `testfiles/` directory (gitignored). The report shows per-request latency, throughput in requests/minute, and the speedup from concurrent execution. See `tests/README.md` for full details.
+---
 
 ## License
 
@@ -971,87 +591,14 @@ This project is MIT licensed. See [LICENSE](LICENSE) for details.
 
 WhisperX is licensed under BSD-4-Clause. See [WhisperX repository](https://github.com/m-bain/whisperX) for details.
 
-## Contributing
-
-Contributions welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Submit a pull request
-
-## Support
-
-For issues and questions:
-
-- **GitHub Issues:** [Create an issue](https://github.com/murtaza-nasir/whisperx-asr-service/issues)
-- **WhisperX Issues:** [WhisperX repository](https://github.com/m-bain/whisperX/issues)
-
 ## Credits
 
+- **whispermlx:** MLX fork of WhisperX for Apple Silicon
 - **WhisperX:** [m-bain/whisperX](https://github.com/m-bain/whisperX)
-- **WhisperX Pyannote.audio 4 Support:** [sealambda/whisperX@feat/pyannote-audio-4](https://github.com/sealambda/whisperX/tree/feat/pyannote-audio-4) - This service uses sealambda's fork for pyannote.audio 4.0 compatibility
 - **OpenAI Whisper:** [openai/whisper](https://github.com/openai/whisper)
+- **MLX:** [ml-explore/mlx](https://github.com/ml-explore/mlx)
 - **Pyannote.audio:** [pyannote/pyannote-audio](https://github.com/pyannote/pyannote-audio)
-- **Docker WhisperX:** [jim60105/docker-whisperX](https://github.com/jim60105/docker-whisperX)
 
 ## Changelog
 
-### v0.3.2 (2026-05-03)
-
-**Reported issues fixed**
-
-- **Pascal/Blackwell image variants (#15):** `:latest` ships PyTorch 2.7.1 (cu126, supports Pascal through Hopper). New `:blackwell` tag ships PyTorch 2.8.0 (cu128) for RTX 50xx. The `Dockerfile` now exposes `TORCH_VERSION` and `TORCH_INDEX_URL` build args and re-pins torch *after* the WhisperX install so the requested version sticks (the upstream fork was silently upgrading torch to 2.8 and breaking Pascal). CI publishes both variants per release with separate buildx cache scopes; either job can fail independently.
-- **Device-aware `BATCH_SIZE` default (#12):** the default is now 16 on cuda and 2 on cpu. The hardcoded 16 was OOM-killing CPU runs (exit 137) on audio longer than ~30 minutes.
-- **Idle model eviction (#16):** new `MODEL_KEEP_ALIVE_SECONDS` env var (default 0/disabled) unloads Whisper models that have been idle longer than the configured window. `MODEL_EVICTION_INTERVAL_SECONDS` controls sweep frequency (floor 30s). The next request that needs an evicted model reloads it transparently.
-- **Real Prometheus `/metrics` (#13):** `/metrics` now returns OpenMetrics text instead of JSON. New histograms and counters cover request duration, status, audio duration/size, in-flight requests, loaded model count, model evictions, and VRAM. The previous JSON shape is preserved at `/queue-metrics` for callers that depended on it. See [Prometheus Metrics](#prometheus-metrics) for the full table and the Ray Serve caveat.
-
-**Other fixes shipped in v0.3.2**
-
-- `/asr` accepts the OpenAI-style aliases advertised by `/v1/models` (`whisper-1`, `whisper-tiny`, `whisper-large-v3`, ...). Previously these returned a 500 because the raw value was passed straight through to `faster_whisper.WhisperModel`.
-- `/v1/models` is sourced from `faster_whisper.available_models()` instead of a hardcoded list, so the advertised set stays in sync with whatever engine version is installed (about 20 canonical names plus the `whisper-1` alias).
-- `app.*` log records from Ray Serve replicas now flow into the per-replica log file. Previously `Loading WhisperX model: X`, `Starting transcription...`, etc. were silently dropped because Ray Serve disables propagation on its own logger.
-- `whisperx_model_evictions_total{model="<name>"}` is pre-registered with value 0 each time a model loads, so dashboards can graph the metric from the first load onward instead of only after the first eviction. Simple mode only; see the Ray Serve caveat.
-
-**New env vars**
-
-| Variable | Default | Description |
-|---|---|---|
-| `MODEL_KEEP_ALIVE_SECONDS` | `0` (disabled) | Idle window after which a Whisper model is unloaded |
-| `MODEL_EVICTION_INTERVAL_SECONDS` | `60` (floor 30) | Sweep cadence for the eviction daemon |
-
-**New build args**
-
-| Build arg | Default | Description |
-|---|---|---|
-| `TORCH_VERSION` | `2.7.1` | PyTorch version to install |
-| `TORCH_INDEX_URL` | `https://download.pytorch.org/whl/cu126` | PyTorch wheel index URL |
-
-**Tests**
-
-`tests/test_v0_3_2.sh` and `tests/test_keep_alive.sh` cover the new endpoints and eviction logic; both verified end-to-end against a Ray Serve container.
-
-### v0.3.0 (2026-02-28)
-- Thread-safe model loading with double-checked locking for concurrent request safety
-- Add Ray Serve mode for high-throughput ASR with cross-request batching
-- Two pipeline strategies: `replicate` (full pipeline per GPU) and `split` (stage per GPU)
-- Multi-GPU support via `NUM_GPU_REPLICAS` and per-stage replica/fraction config
-- Refactor pipeline into shared stage functions (`app/pipeline.py`)
-- Add async GPU queue with semaphore for simple mode (non-blocking event loop)
-- Add `/metrics` endpoint for pipeline monitoring
-- Add `SERVE_MODE`, `PIPELINE_STRATEGY`, `NUM_GPU_REPLICAS` env vars
-- Add `entrypoint.sh` for automatic mode switching in Docker
-- GPU pinning via `NVIDIA_VISIBLE_DEVICES` in local compose overrides
-- Add stress test suite (`tests/stress_test.py`)
-
-### v0.2.0 (2025-01-21)
-- Add /v1/models and /v1/audio/transcriptions endpoints for OpenAI API compatibility
-- Add diarize parameter for broader API compatibility
-- Add offline mode support and fix model caching
-- Use Query() parameters to work as a drop-in replacement for other Whisper ASR services
-
-### v0.1.1alpha (2025-11-23)
-- Initial release
-- WhisperX integration with API wrapper
-- Speaker diarization support
-- Docker deployment
+See [CHANGELOG.md](CHANGELOG.md) for version history.

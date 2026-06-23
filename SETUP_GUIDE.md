@@ -1,13 +1,13 @@
-# WhisperX ASR Service - Setup Guide for Speakr Integration
+# Whispermlx ASR Service - Setup Guide
 
-This guide walks you through setting up the WhisperX ASR service for use with Speakr.
+This guide walks you through setting up the native Apple-Silicon ASR service powered by whispermlx (MLX).
 
 ## Table of Contents
 
 1. [Prerequisites](#prerequisites)
-2. [Setup on the Same Machine](#setup-on-the-same-machine)
-3. [Setup on a Separate GPU Machine](#setup-on-a-separate-gpu-machine)
-4. [Configuration](#configuration)
+2. [Installation](#installation)
+3. [Configuration](#configuration)
+4. [Running the Service](#running-the-service)
 5. [Testing](#testing)
 6. [Troubleshooting](#troubleshooting)
 
@@ -17,95 +17,73 @@ This guide walks you through setting up the WhisperX ASR service for use with Sp
 
 ### Hardware
 
-- **GPU Machine Requirements:**
-  - NVIDIA GPU with 8GB+ VRAM (RTX 3060, RTX 3080, A100, etc.)
-  - 16GB+ RAM
-  - 50GB+ free disk space
-  - Ubuntu 20.04+ or similar Linux distribution
+- **Apple Silicon Mac** (M1, M2, M3, or M4)
+- **16 GB+ RAM** recommended (8 GB may work with `tiny`/`base` models)
+- **50 GB+ free disk space** for model caching
 
 ### Software
 
-1. **Docker and Docker Compose**
-   ```bash
-   # Install Docker
-   curl -fsSL https://get.docker.com -o get-docker.sh
-   sudo sh get-docker.sh
+1. **uv** (Python package manager)
 
-   # Install Docker Compose
-   sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-   sudo chmod +x /usr/local/bin/docker-compose
+   Install uv:
+   ```bash
+   curl -LsSf https://astral.sh/uv/install.sh | sh
    ```
 
-2. **NVIDIA Docker Runtime**
+   Verify installation:
    ```bash
-   # Add NVIDIA Docker repository
-   distribution=$(. /etc/os-release;echo $ID$VERSION_ID)
-   curl -s -L https://nvidia.github.io/nvidia-docker/gpgkey | sudo apt-key add -
-   curl -s -L https://nvidia.github.io/nvidia-docker/$distribution/nvidia-docker.list | \
-     sudo tee /etc/apt/sources.list.d/nvidia-docker.list
-
-   # Install nvidia-container-toolkit
-   sudo apt-get update
-   sudo apt-get install -y nvidia-container-toolkit
-
-   # Restart Docker
-   sudo systemctl restart docker
-
-   # Test GPU access
-   docker run --rm --gpus all nvidia/cuda:12.1.1-base-ubuntu22.04 nvidia-smi
+   uv --version
    ```
 
-3. **Hugging Face Account and Token** - **YOU MUST COMPLETE ALL STEPS:**
+2. **FFmpeg** (for audio decoding)
+
+   ```bash
+   brew install ffmpeg
+   ```
+
+3. **Hugging Face Account and Token** (for speaker diarization)
 
    a. **Create Account:**
       - Visit: https://huggingface.co/join
       - Sign up with your email
 
-   b. **Accept Model Agreements (REQUIRED - ALL THREE):**
-      Accept agreements for all models used by the pipeline:
-      - https://huggingface.co/pyannote/speaker-diarization-community-1
-      - https://huggingface.co/pyannote/segmentation-3.0
-      - https://huggingface.co/pyannote/speaker-diarization-3.1
-
-      For each: Click **"Agree and access repository"**
-      Fill out form (Company/use case) - approval is instant
+   b. **Accept Model Agreement (REQUIRED for diarization):**
+      - Visit: https://huggingface.co/pyannote/speaker-diarization-community-1
+      - Click **"Agree and access repository"**
 
    c. **Generate Token:**
       - Visit: https://huggingface.co/settings/tokens
-      - Click "New token" → Name it → Select "Read" permission
+      - Click "New token" -> Name it -> Select "Read" permission
       - Copy token (starts with `hf_...`)
 
-   ⚠️ **Without step (b), you will get "403 Access Denied" errors!**
+   > Without the HF token, diarization is gracefully skipped. Transcription still works, but no speaker labels are assigned.
 
 ---
 
-## Setup on the Same Machine
+## Installation
 
-If you're running both Speakr and WhisperX ASR on the same machine:
-
-### Step 1: Clone/Create Repository
+### Step 1: Clone the Repository
 
 ```bash
-# Navigate to where you want the service
-cd /path/to/your/projects
-
-# Create the directory
-mkdir whisperx-asr-service
+git clone https://github.com/murtaza-nasir/whisperx-asr-service.git
 cd whisperx-asr-service
-
-# If using Git, initialize
-git init
 ```
 
-### Step 2: Add Files
+### Step 2: Create Virtual Environment and Install Dependencies
 
-Copy all the files from this repository into the directory:
-- `app/main.py`
-- `Dockerfile`
-- `docker-compose.yml`
-- `requirements.txt`
-- `.env.example`
-- `.gitignore`
+```bash
+# Create a Python 3.13 virtual environment
+# (Python 3.14 is incompatible with whispermlx >=3.10,<3.14)
+uv venv --python 3.13
+
+# Install all dependencies
+uv sync
+```
+
+This installs:
+- `whispermlx` (MLX Whisper backend)
+- `fastapi`, `uvicorn[standard]`, `python-multipart`, `pydantic`, `prometheus-client`
+- Dev tools: `pytest`, `ruff`, `commitizen`, `httpx`
 
 ### Step 3: Configure Environment
 
@@ -117,50 +95,154 @@ cp .env.example .env
 nano .env
 ```
 
-Update `.env`:
+Minimal `.env` configuration:
+
 ```bash
-HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-DEVICE=cuda
-COMPUTE_TYPE=float16
-BATCH_SIZE=16
+# Required for speaker diarization
+HF_TOKEN=hf_your_token_here
+
+# Device for torch-based stages (VAD, alignment, diarization).
+# MLX Whisper ASR always runs on the Metal GPU automatically.
+DEVICE=cpu
+
+# Model to preload on startup (optional, reduces first-request latency)
+PRELOAD_MODEL=large-v3
+
+# Service port
+PORT=9001
 ```
 
-### Step 3.5: Pick the Right Image Variant
+---
 
-Two prebuilt Docker images are published per release. They use the same code
-but ship different PyTorch wheels:
+## Configuration
 
-| Tag | PyTorch | Supported GPUs |
-|-----|---------|----------------|
-| `:latest` (`learnedmachine/whisperx-asr-service:latest`) | 2.7.1 / cu126 | Pascal (10xx) through Hopper |
-| `:blackwell` (`learnedmachine/whisperx-asr-service:blackwell`) | 2.8.0 / cu128 | Blackwell (RTX 50xx) |
+### Environment Variables
 
-If you have an RTX 50xx, switch the `image:` line in `docker-compose.yml` to
-the `-blackwell` tag. Everyone else can stick with `:latest`. Pascal users
-specifically need `:latest`; PyTorch 2.8 dropped Pascal support and the
-Blackwell image will fail with `CUDA error: no kernel image is available
-for execution on the device`.
-
-If you build from source, override the build args:
+Edit `.env` to customize the service:
 
 ```bash
-docker build \
-  --build-arg TORCH_VERSION=2.7.1 \
-  --build-arg TORCH_INDEX_URL=https://download.pytorch.org/whl/cu126 \
-  -t whisperx-asr-service:custom .
+# ---------------------------------------------------------------------------
+# Hugging Face Token (REQUIRED for speaker diarization)
+# ---------------------------------------------------------------------------
+# Without this, diarization is skipped and no speaker labels are produced.
+# Accept the model agreement at:
+#   https://huggingface.co/pyannote/speaker-diarization-community-1
+HF_TOKEN=hf_your_token_here
+
+# ---------------------------------------------------------------------------
+# Device Configuration (MLX device semantics)
+# ---------------------------------------------------------------------------
+# DEVICE controls where VAD, wav2vec2 alignment, and pyannote diarization
+# (torch-based stages) run. MLX Whisper ASR always runs on the Metal GPU
+# automatically regardless of this setting.
+#
+# Options:
+#   cpu   - Safe default on Apple Silicon; torch stages on CPU, ASR on Metal GPU
+#   mps   - Use Apple MPS for torch stages (experimental)
+DEVICE=cpu
+
+# ---------------------------------------------------------------------------
+# Compute Type & Batch Size (accepted but INERT under MLX)
+# ---------------------------------------------------------------------------
+# These are read for API compatibility but have NO EFFECT on the MLX backend.
+#COMPUTE_TYPE=float16
+#BATCH_SIZE=16
+
+# ---------------------------------------------------------------------------
+# Model Cache Directories
+# ---------------------------------------------------------------------------
+CACHE_DIR=~/.cache/whisperx-asr
+HF_HOME=~/.cache/whisperx-asr
+
+# Offline mode (optional): set to 1 to prevent network requests after caching
+#HF_HUB_OFFLINE=1
+
+# ---------------------------------------------------------------------------
+# Model Preloading (OPTIONAL)
+# ---------------------------------------------------------------------------
+# Preload a model on startup to reduce first-request latency.
+# Options: tiny, tiny.en, base, base.en, small, small.en, medium, medium.en,
+#          large, large-v1, large-v2, large-v3, large-v3-turbo, turbo
+PRELOAD_MODEL=large-v3
+
+# ---------------------------------------------------------------------------
+# Service Port
+# ---------------------------------------------------------------------------
+PORT=9001
+
+# ---------------------------------------------------------------------------
+# Upload Limits
+# ---------------------------------------------------------------------------
+#MAX_FILE_SIZE_MB=1000
+
+# ---------------------------------------------------------------------------
+# GPU Concurrency & Queue
+# ---------------------------------------------------------------------------
+#GPU_CONCURRENCY=1
+#MAX_QUEUE_SIZE=32
+
+# ---------------------------------------------------------------------------
+# Idle Model Eviction (OPTIONAL)
+# ---------------------------------------------------------------------------
+#MODEL_KEEP_ALIVE_SECONDS=3600
+#MODEL_EVICTION_INTERVAL_SECONDS=60
 ```
 
-### Step 4: Build and Start Service
+### Model Selection
+
+Available MLX Whisper models:
+
+| Model | Speed | Quality | RAM |
+|-------|-------|---------|-----|
+| `tiny`, `tiny.en` | Fastest | Lowest | ~2 GB |
+| `base`, `base.en` | Very Fast | Low | ~2 GB |
+| `small`, `small.en` | Fast | Medium | ~2.3 GB |
+| `medium`, `medium.en` | Moderate | Good | ~5 GB |
+| `large`, `large-v1` | Slow | Excellent | ~10+ GB |
+| `large-v2` | Slow | Excellent | ~10+ GB |
+| `large-v3` | Slow | Best | ~10+ GB |
+| `large-v3-turbo`, `turbo` | Fast | High | ~5 GB |
+
+OpenAI-style aliases (`whisper-1`, `whisper-tiny`, `whisper-large-v3`) are also accepted and resolve to the corresponding MLX model.
+
+Models are downloaded on first use and cached in `CACHE_DIR` (default `~/.cache/whisperx-asr`).
+
+### Idle Model Eviction
+
+To reclaim memory between bursts of activity:
 
 ```bash
-# Build the Docker image (this will take 10-15 minutes)
-docker compose build
+MODEL_KEEP_ALIVE_SECONDS=3600          # unload models idle for 1 hour
+MODEL_EVICTION_INTERVAL_SECONDS=60     # sweep cadence (floor 30 seconds)
+```
 
-# Start the service
-docker compose up -d
+Default is `0` (disabled; models stay loaded). The next request that needs an evicted model reloads it transparently.
 
-# Check logs to ensure it's running
-docker compose logs -f
+---
+
+## Running the Service
+
+### Start the Service
+
+**Option A: Using entrypoint.sh (recommended)**
+
+```bash
+./entrypoint.sh
+```
+
+This loads your `.env` file and starts uvicorn on port 9001.
+
+**Option B: Direct uvicorn**
+
+```bash
+# Source .env first, or set environment variables inline
+uv run uvicorn app.main:app --host 127.0.0.1 --port 9001
+```
+
+**Option C: With specific environment variables**
+
+```bash
+DEVICE=cpu PRELOAD_MODEL=base uv run uvicorn app.main:app --host 127.0.0.1 --port 9001
 ```
 
 Look for:
@@ -168,255 +250,67 @@ Look for:
 INFO:     Started server process
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
-INFO:     Uvicorn running on http://0.0.0.0:9000
+INFO:     Uvicorn running on http://127.0.0.1:9001
 ```
 
-### Step 5: Test the Service
+### Stop the Service
+
+Press `Ctrl+C` in the terminal where the service is running, or kill the process:
 
 ```bash
-# Health check
-curl http://localhost:9000/health
-
-# Expected response:
-{
-  "status": "healthy",
-  "device": "cuda",
-  "loaded_models": []
-}
+lsof -ti tcp:9001 | xargs kill
 ```
 
-### Step 6: Configure Speakr
-
-Update Speakr's `.env` file:
+### Run in the Background
 
 ```bash
-# Enable ASR endpoint
-USE_ASR_ENDPOINT=true
-
-# Point to WhisperX service (using container name if in same Docker network)
-ASR_BASE_URL=http://whisperx-asr-api:9000
-
-# Or if not in same network:
-# ASR_BASE_URL=http://localhost:9000
+nohup ./entrypoint.sh &> service.log &
+tail -f service.log
 ```
-
-### Step 7: Restart Speakr
-
-```bash
-cd /path/to/speakr
-docker compose restart
-```
-
----
-
-## Setup on a Separate GPU Machine
-
-If you have a dedicated GPU machine for ASR processing:
-
-### On the GPU Machine
-
-#### Step 1: Initial Setup
-
-```bash
-# SSH into your GPU machine
-ssh user@gpu-machine-ip
-
-# Create project directory
-mkdir -p ~/whisperx-asr-service
-cd ~/whisperx-asr-service
-```
-
-#### Step 2: Add Files and Configure
-
-Follow Steps 2-4 from "Setup on the Same Machine" section above.
-
-#### Step 3: Expose Service to Network
-
-Edit `docker-compose.yml` to expose the service:
-
-```yaml
-services:
-  whisperx-asr:
-    # ... existing configuration ...
-    ports:
-      - "0.0.0.0:9000:9000"  # Changed from "9000:9000" to expose to network
-```
-
-#### Step 4: Configure Firewall
-
-```bash
-# Allow port 9000 (Ubuntu/Debian with ufw)
-sudo ufw allow 9000/tcp
-
-# Or for RHEL/CentOS with firewalld
-sudo firewall-cmd --permanent --add-port=9000/tcp
-sudo firewall-cmd --reload
-```
-
-#### Step 5: Start Service
-
-```bash
-docker compose up -d
-docker compose logs -f
-```
-
-#### Step 6: Test from GPU Machine
-
-```bash
-# Get your machine's IP
-ip addr show | grep 'inet '
-
-# Test locally
-curl http://localhost:9000/health
-```
-
-### On the Speakr Machine
-
-#### Step 1: Test Connectivity
-
-```bash
-# Replace GPU_MACHINE_IP with actual IP address
-curl http://GPU_MACHINE_IP:9000/health
-```
-
-If this fails:
-- Check firewall settings on GPU machine
-- Verify both machines are on the same network or have routing configured
-- Check if port 9000 is open
-
-#### Step 2: Update Speakr Configuration
-
-Edit Speakr's `.env` file:
-
-```bash
-USE_ASR_ENDPOINT=true
-ASR_BASE_URL=http://GPU_MACHINE_IP:9000
-```
-
-Replace `GPU_MACHINE_IP` with the actual IP address of your GPU machine.
-
-#### Step 3: Restart Speakr
-
-```bash
-cd /path/to/speakr
-docker compose restart
-```
-
----
-
-## Configuration
-
-### Performance Tuning
-
-Edit `.env` on the WhisperX service:
-
-#### For High-End GPU (RTX 3080+, A100)
-```bash
-BATCH_SIZE=32
-COMPUTE_TYPE=float16
-```
-
-#### For Mid-Range GPU (RTX 3060, RTX 2080)
-```bash
-BATCH_SIZE=16
-COMPUTE_TYPE=float16
-```
-
-#### For Low-End GPU (GTX 1660, RTX 2060)
-```bash
-BATCH_SIZE=8
-COMPUTE_TYPE=int8
-```
-
-#### For CPU-Only (Not Recommended)
-
-The `BATCH_SIZE` default is now device-aware: 16 on cuda, 2 on cpu. For CPU
-runs longer than ~15 minutes drop it to 1 to avoid OOM kills (exit 137).
-
-```bash
-DEVICE=cpu
-COMPUTE_TYPE=int8
-BATCH_SIZE=2          # default on cpu; use 1 for >30 min audio, smaller models
-PRELOAD_MODEL=small   # tiny/base/small are realistic on cpu; large-v3 is not
-```
-
-### Idle Model Eviction
-
-If you serve multiple Whisper models in rotation and want to reclaim VRAM
-between bursts, set `MODEL_KEEP_ALIVE_SECONDS` to the idle window after which
-a model should be unloaded:
-
-```bash
-MODEL_KEEP_ALIVE_SECONDS=3600          # unload models idle for 1 hour
-MODEL_EVICTION_INTERVAL_SECONDS=60     # sweep cadence (floor 30 seconds)
-```
-
-Default is `0`, which keeps the previous behaviour (models stay resident
-until the process exits). The next request that needs an evicted model
-reloads it transparently.
-
-### Model Selection in Speakr
-
-Speakr will use the model specified in its requests. The WhisperX service supports:
-
-- `tiny` - Fastest, lowest quality
-- `base` - Fast, low quality
-- `small` - Good balance of speed and quality
-- `medium` - Good quality, slower
-- `large-v2` - Excellent quality, slow
-- `large-v3` - Best quality, slow
-
-Models are downloaded on first use and cached.
 
 ---
 
 ## Testing
 
-### Step 1: Basic Health Check
+### Step 1: Health Check
 
 ```bash
-curl http://localhost:9000/health
-# Or remote: curl http://GPU_MACHINE_IP:9000/health
+curl http://localhost:9001/health
 ```
 
 Expected response:
 ```json
 {
   "status": "healthy",
-  "device": "cuda",
-  "loaded_models": []
+  "device": "cpu",
+  "loaded_models": ["large-v3"],
+  "serve_mode": "simple"
 }
 ```
 
-### Step 1c: Prometheus Metrics
+### Step 2: Prometheus Metrics
 
 ```bash
-curl http://localhost:9000/metrics | head -20
+curl http://localhost:9001/metrics | head -20
 ```
 
-Expected: OpenMetrics text starting with `# HELP whisperx_...` lines, not
-JSON. Add a Prometheus scrape job for this endpoint to monitor request
-throughput, durations, audio sizes, and VRAM usage. See the README's
-"Prometheus Metrics" section for the full metric list.
+Expected: OpenMetrics text starting with `# HELP whisperx_...` lines.
 
-### Step 2: Test Transcription
-
-Create a test audio file or use an existing one:
+### Step 3: Test Transcription
 
 ```bash
-# Test with a simple MP3 file
-curl -X POST http://localhost:9000/asr \
+curl -X POST http://localhost:9001/asr \
   -F "audio_file=@test.mp3" \
   -F "language=en" \
   -F "model=small" \
   -F "output_format=json" \
-  -F "enable_diarization=false"
+  -F "diarize=false"
 ```
 
-### Step 3: Test with Diarization
+### Step 4: Test with Diarization
 
 ```bash
-curl -X POST http://localhost:9000/asr \
+curl -X POST http://localhost:9001/asr \
   -F "audio_file=@meeting.mp3" \
   -F "language=en" \
   -F "model=small" \
@@ -426,18 +320,39 @@ curl -X POST http://localhost:9000/asr \
   -F "max_speakers=4"
 ```
 
-### Step 4: Test from Speakr
+### Step 5: Smoke Test Script
 
-1. Log into Speakr
-2. Upload or record an audio file
-3. Check Speakr logs for ASR requests:
-   ```bash
-   docker compose logs -f app | grep ASR
-   ```
-4. Check WhisperX service logs:
-   ```bash
-   docker compose logs -f whisperx-asr
-   ```
+```bash
+./test-api.sh localhost 9001 path/to/audio.wav
+```
+
+### Step 6: Unit and Integration Tests
+
+```bash
+# Fast unit tests (whispermlx mocked, no model downloads)
+uv run pytest tests/unit -q
+
+# Slow integration tests (live app + small model + audio fixture + HF token)
+uv run pytest tests/integration -q -m slow
+```
+
+---
+
+## Integration with Speakr
+
+To use this service with [Speakr](https://github.com/murtaza-nasir/speakr):
+
+Update Speakr's `.env` file:
+
+```bash
+# Enable ASR endpoint
+USE_ASR_ENDPOINT=true
+
+# Point to the whispermlx ASR service
+ASR_BASE_URL=http://localhost:9001
+```
+
+If the service is on a different machine, replace `localhost` with the machine's IP address and ensure port 9001 is accessible through your firewall.
 
 ---
 
@@ -445,138 +360,48 @@ curl -X POST http://localhost:9000/asr \
 
 ### Issue: Service Won't Start
 
-**Check logs:**
-```bash
-docker compose logs whisperx-asr
-```
+**Check logs for errors.** Common causes:
+- Port 9001 already in use: Change `PORT` in `.env` or stop the conflicting process
+- Python version mismatch: Ensure you are using Python 3.13 via `uv` (not system Python 3.14)
+- Missing dependencies: Run `uv sync` to install all dependencies
 
-**Common causes:**
-- GPU not accessible: Verify `nvidia-smi` works inside Docker
-- Port 9000 already in use: Change port in `docker-compose.yml`
-- Invalid HF_TOKEN: Check token and model access agreements
+### Issue: Speaker Diarization Fails or No Labels
 
-### Issue: Speakr Can't Connect to WhisperX
+**Check:**
+1. `HF_TOKEN` is set correctly in `.env`
+2. You accepted the model agreement at [pyannote/speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1)
+3. Check logs for diarization errors
 
-**From Speakr machine:**
-```bash
-# Test connectivity
-curl -v http://ASR_BASE_URL/health
-
-# Check if port is open (from Speakr machine)
-telnet GPU_MACHINE_IP 9000
-```
-
-**Solutions:**
-- Verify firewall allows port 9000
-- Check both machines are on same network
-- Try IP address instead of hostname
-- Check Docker network configuration
+**Note:** Without `HF_TOKEN`, diarization is gracefully skipped. Transcription still succeeds (HTTP 200) but no speaker labels are assigned. This is by design.
 
 ### Issue: Slow Processing
 
-**Check GPU usage:**
-```bash
-nvidia-smi -l 1
-```
-
 **Solutions:**
-- Increase BATCH_SIZE if GPU has available memory
-- Use smaller model (e.g., `small` instead of `large-v3`)
-- Check if GPU is being used (should show in nvidia-smi)
-- Disable diarization for faster processing
+- Use a smaller model (e.g., `small` or `base` instead of `large-v3`)
+- Use `large-v3-turbo` for a good speed/quality balance
+- Disable diarization if not needed: `diarize=false`
 
 ### Issue: Out of Memory
 
-**Error:** `CUDA out of memory`
+**Solutions:**
+1. Use a smaller model (`small` or `base`)
+2. Reduce `MAX_FILE_SIZE_MB` in `.env`
+3. Disable diarization: `diarize=false`
+4. Split large audio files into smaller chunks
+
+### Issue: Model Download Fails
 
 **Solutions:**
-1. Reduce BATCH_SIZE: `BATCH_SIZE=8`
-2. Use smaller model in Speakr
-3. Use `COMPUTE_TYPE=int8`
-4. Close other GPU applications
-
-### Issue: Speaker Diarization Fails
-
-**Check:**
-1. HF_TOKEN is set correctly
-2. Accepted model user agreements on Hugging Face
-3. Check logs: `docker compose logs | grep -i diarization`
-
-**Solutions:**
-- Verify token: Visit https://huggingface.co/settings/tokens
-- Accept agreements again
-- Check if pyannote models can download (internet access required on first run)
+- Check internet access on first run (models are cached after first download)
+- Verify `CACHE_DIR` and `HF_HOME` are set to writable paths
+- For air-gapped environments, see the README's [Offline Use](README.md#offline-use) section
 
 ### Issue: API Returns 500 Error
 
-**Check logs:**
-```bash
-docker compose logs whisperx-asr | tail -100
-```
-
-**Common causes:**
-- Invalid audio format
-- Model loading failed
-- Out of memory
-- Missing dependencies
-
-**Solutions:**
-- Convert audio to MP3 or WAV
-- Restart service: `docker compose restart`
-- Check available disk space
-- Rebuild image: `docker compose build --no-cache`
-
----
-
-## Monitoring
-
-### Check Service Status
-
-```bash
-# Container status
-docker compose ps
-
-# Resource usage
-docker stats whisperx-asr-api
-
-# GPU usage
-nvidia-smi -l 1
-```
-
-### View Logs
-
-```bash
-# Real-time logs
-docker compose logs -f
-
-# Last 100 lines
-docker compose logs --tail=100
-
-# Errors only
-docker compose logs | grep -i error
-```
-
-### Performance Monitoring
-
-Create a simple monitoring script:
-
-```bash
-#!/bin/bash
-# monitor.sh
-
-echo "=== WhisperX ASR Service Status ==="
-echo "Container Status:"
-docker compose ps
-
-echo -e "\n=== GPU Status ==="
-nvidia-smi --query-gpu=name,memory.used,memory.total,utilization.gpu --format=csv
-
-echo -e "\n=== Service Health ==="
-curl -s http://localhost:9000/health | json_pp
-
-echo -e "\n=== Recent Logs ==="
-docker compose logs --tail=10
-```
+**Check logs for error details.** Common causes:
+- Invalid audio format (use FFmpeg to convert to MP3 or WAV)
+- Model loading failed (check disk space, internet access)
+- Incorrect parameters (check API docs at `/docs`)
 
 ---
 
@@ -586,24 +411,12 @@ docker compose logs --tail=10
 
 Basic protection:
 ```bash
-# Restrict access to specific IP (e.g., your Speakr machine)
-sudo ufw allow from SPEAKR_IP to any port 9000
-sudo ufw deny 9000/tcp
-
-# Store HF_TOKEN in .env file, not hardcoded
+# Restrict access to specific IP
+sudo ufw allow from YOUR_IP to any port 9001
+sudo ufw deny 9001/tcp
 ```
 
-For internet exposure, you'll need to add your own reverse proxy and authentication.
-
----
-
-## Next Steps
-
-1. **Monitor Performance:** Watch logs during first few transcriptions
-2. **Tune Configuration:** Adjust BATCH_SIZE and model based on your needs
-3. **Set Up Backups:** Backup model cache to avoid re-downloading
-4. **Configure Alerts:** Set up monitoring for service health
-5. **Plan for Scaling:** Consider multiple instances for high volume
+Store `HF_TOKEN` in the `.env` file (gitignored), never hardcoded.
 
 ---
 
@@ -612,7 +425,6 @@ For internet exposure, you'll need to add your own reverse proxy and authenticat
 If you encounter issues:
 
 1. Check this troubleshooting guide
-2. Review service logs: `docker compose logs`
-3. Test with simple audio files first
-4. Verify GPU access: `nvidia-smi`
-5. Create an issue with logs and configuration details
+2. Check the [README](README.md) for full API documentation
+3. Run health check: `curl http://localhost:9001/health`
+4. Create an issue with logs and configuration details
