@@ -396,7 +396,14 @@ app.include_router(openai_router)
 app.include_router(models_router)
 
 
-if __name__ == "__main__":
+def main():
+    """Entry point for uvx / console_scripts."""
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=9001)
+    port = int(os.getenv("PORT", "9001"))
+    host = os.getenv("HOST", "127.0.0.1")
+    uvicorn.run(app, host=host, port=port)
+
+
+if __name__ == "__main__":
+    main()
