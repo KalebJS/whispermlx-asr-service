@@ -2370,6 +2370,7 @@ version = "0.4.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
+    { name = "numba" },
     { name = "prometheus-client" },
     { name = "pydantic" },
     { name = "python-multipart" },
@@ -2389,6 +2390,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi" },
+    { name = "numba", specifier = ">=0.60" },
     { name = "prometheus-client" },
     { name = "pydantic" },
     { name = "python-multipart" },

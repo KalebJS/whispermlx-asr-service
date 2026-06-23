@@ -24,6 +24,7 @@ dependencies = [
     "python-multipart",
     "pydantic",
     "prometheus-client",
+    "numba>=0.60",  # override mlx-whisper's stale numba==0.53.1 pin (incompatible with Python 3.13)
 ]
 
 [project.urls]
