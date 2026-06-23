@@ -3,6 +3,11 @@ Unit tests for idle model eviction and loaded_models tracking covering
 VAL-OPS-029, VAL-OPS-030, VAL-CROSS-015.
 
 All tests mock whispermlx so no real model downloads occur.
+
+CRITICAL: these tests exercise the REAL eviction code path by calling
+``pipeline._run_eviction_sweep()`` directly.  They do NOT duplicate the
+eviction-sweep logic inline, so if the eviction function changes the tests
+will fail rather than false-pass.
 """
 
 import io
@@ -13,7 +18,6 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -78,12 +82,20 @@ def _extract_counter_value(body: str, metric_name: str, labels: dict[str, str]) 
         if stripped.startswith("#"):
             continue
         for name_variant in (f"{metric_name}_total", metric_name):
-            prefix = f'{name_variant}{{{label_str}}}'
+            prefix = f"{name_variant}{{{label_str}}}"
             if stripped.startswith(prefix):
                 parts = stripped.split()
                 if len(parts) >= 2:
                     return float(parts[-1])
     return 0.0
+
+
+def _reset_pipeline(pipe_mod, keep_alive_seconds=1):
+    """Clear pipeline caches and set eviction config for testing."""
+    pipe_mod.MODEL_KEEP_ALIVE_SECONDS = keep_alive_seconds
+    pipe_mod._whisper_models.clear()
+    pipe_mod._whisper_models_last_used.clear()
+    pipe_mod._eviction_thread_started = False
 
 
 # ---------------------------------------------------------------------------
@@ -113,19 +125,9 @@ def client_no_preload():
             clear=False,
         ),
     ):
-        from app.pipeline import (
-            _eviction_thread_started,
-            _whisper_models,
-            _whisper_models_last_used,
-        )
-
-        _whisper_models.clear()
-        _whisper_models_last_used.clear()
-
-        # Reset the eviction thread flag so it can be restarted
         import app.pipeline as pipe_mod
 
-        pipe_mod._eviction_thread_started = False
+        _reset_pipeline(pipe_mod, keep_alive_seconds=0)
 
         from app.main import app
 
@@ -138,7 +140,7 @@ def client_with_eviction():
     """
     TestClient with MODEL_KEEP_ALIVE_SECONDS=1 and a short sweep interval
     so eviction happens quickly.  The eviction thread is not started by
-    default (it's lazy); tests trigger it manually or via load_whisper_model.
+    default (it's lazy); tests trigger it manually via _run_eviction_sweep().
     """
     wmlx = _make_whispermlx_mock()
     with (
@@ -157,19 +159,10 @@ def client_with_eviction():
             clear=False,
         ),
     ):
-        # Re-read the env vars into the pipeline module
         import app.pipeline as pipe_mod
 
-        pipe_mod.MODEL_KEEP_ALIVE_SECONDS = int(
-            os.getenv("MODEL_KEEP_ALIVE_SECONDS", "1")
-        )
-        pipe_mod.MODEL_EVICTION_INTERVAL_SECONDS = max(
-            30, int(os.getenv("MODEL_EVICTION_INTERVAL_SECONDS", "30"))
-        )
-
-        pipe_mod._whisper_models.clear()
-        pipe_mod._whisper_models_last_used.clear()
-        pipe_mod._eviction_thread_started = False
+        _reset_pipeline(pipe_mod, keep_alive_seconds=1)
+        pipe_mod.MODEL_EVICTION_INTERVAL_SECONDS = max(30, int(os.getenv("MODEL_EVICTION_INTERVAL_SECONDS", "30")))
 
         from app.main import app
 
@@ -242,12 +235,16 @@ class TestIdleModelEviction:
     VAL-OPS-030: With MODEL_KEEP_ALIVE_SECONDS set, an idle model is evicted,
     whisperx_model_evictions_total increments, and the model disappears from
     loaded_models.
+
+    These tests call the REAL ``_run_eviction_sweep()`` function rather than
+    duplicating the eviction logic inline, so they exercise the actual
+    pipeline eviction code path and cannot false-pass if that function changes.
     """
 
     def test_eviction_removes_model_from_cache(self):
         """
-        Directly test the eviction loop: a model idle past the keep-alive
-        window is removed from _whisper_models and _whisper_models_last_used.
+        A model idle past the keep-alive window is removed from the cache
+        when ``_run_eviction_sweep()`` is called.
         """
         wmlx = _make_whispermlx_mock()
         with (
@@ -256,10 +253,7 @@ class TestIdleModelEviction:
         ):
             import app.pipeline as pipe_mod
 
-            pipe_mod.MODEL_KEEP_ALIVE_SECONDS = 1
-            pipe_mod._whisper_models.clear()
-            pipe_mod._whisper_models_last_used.clear()
-            pipe_mod._eviction_thread_started = False
+            _reset_pipeline(pipe_mod, keep_alive_seconds=1)
 
             # Load a model
             pipe_mod.load_whisper_model("tiny")
@@ -268,34 +262,18 @@ class TestIdleModelEviction:
             # Simulate the model being idle: set last_used far in the past
             pipe_mod._whisper_models_last_used["tiny"] = time.time() - 100
 
-            # Run one eviction sweep manually (simulate what the loop does)
-            now = time.time()
-            candidates = [
-                name
-                for name, last in list(pipe_mod._whisper_models_last_used.items())
-                if now - last > pipe_mod.MODEL_KEEP_ALIVE_SECONDS
-                and name in pipe_mod._whisper_models
-            ]
-            for name in candidates:
-                with pipe_mod._model_load_lock:
-                    last = pipe_mod._whisper_models_last_used.get(name, 0)
-                    if name in pipe_mod._whisper_models and now - last > pipe_mod.MODEL_KEEP_ALIVE_SECONDS:
-                        del pipe_mod._whisper_models[name]
-                        pipe_mod._whisper_models_last_used.pop(name, None)
-                        try:
-                            from app import metrics as prom_metrics
-
-                            prom_metrics.MODEL_EVICTIONS_TOTAL.labels(model=name).inc()
-                        except Exception:
-                            pass
+            # Call the REAL eviction sweep function
+            evicted = pipe_mod._run_eviction_sweep()
 
             # Model should be evicted
+            assert evicted is True
             assert "tiny" not in pipe_mod._whisper_models
             assert "tiny" not in pipe_mod._whisper_models_last_used
 
     def test_eviction_counter_increments(self):
         """
-        After eviction, whisperx_model_evictions_total{model="tiny"} >= 1.
+        After ``_run_eviction_sweep()`` evicts a model, the
+        whisperx_model_evictions_total counter increments.
         """
         wmlx = _make_whispermlx_mock()
         with (
@@ -304,10 +282,9 @@ class TestIdleModelEviction:
         ):
             import app.pipeline as pipe_mod
 
-            pipe_mod.MODEL_KEEP_ALIVE_SECONDS = 1
-            pipe_mod._whisper_models.clear()
-            pipe_mod._whisper_models_last_used.clear()
-            pipe_mod._eviction_thread_started = False
+            _reset_pipeline(pipe_mod, keep_alive_seconds=1)
+
+            from app import metrics as prom_metrics
 
             # Load the model (pre-registers counter)
             pipe_mod.load_whisper_model("tiny")
@@ -316,25 +293,10 @@ class TestIdleModelEviction:
             # Simulate idle by setting last_used far in the past
             pipe_mod._whisper_models_last_used["tiny"] = time.time() - 100
 
-            # Run eviction sweep
-            from app import metrics as prom_metrics
-
             before = prom_metrics.MODEL_EVICTIONS_TOTAL.labels(model="tiny")._value.get()
 
-            now = time.time()
-            candidates = [
-                name
-                for name, last in list(pipe_mod._whisper_models_last_used.items())
-                if now - last > pipe_mod.MODEL_KEEP_ALIVE_SECONDS
-                and name in pipe_mod._whisper_models
-            ]
-            for name in candidates:
-                with pipe_mod._model_load_lock:
-                    last = pipe_mod._whisper_models_last_used.get(name, 0)
-                    if name in pipe_mod._whisper_models and now - last > pipe_mod.MODEL_KEEP_ALIVE_SECONDS:
-                        del pipe_mod._whisper_models[name]
-                        pipe_mod._whisper_models_last_used.pop(name, None)
-                        prom_metrics.MODEL_EVICTIONS_TOTAL.labels(model=name).inc()
+            # Call the REAL eviction sweep function
+            pipe_mod._run_eviction_sweep()
 
             after = prom_metrics.MODEL_EVICTIONS_TOTAL.labels(model="tiny")._value.get()
             assert after > before
@@ -342,7 +304,8 @@ class TestIdleModelEviction:
 
     def test_health_no_longer_lists_evicted_model(self):
         """
-        After eviction, /health loaded_models no longer lists the evicted model.
+        After ``_run_eviction_sweep()`` evicts a model, /health loaded_models
+        no longer lists it.
         """
         wmlx = _make_whispermlx_mock()
         with (
@@ -362,10 +325,7 @@ class TestIdleModelEviction:
         ):
             import app.pipeline as pipe_mod
 
-            pipe_mod.MODEL_KEEP_ALIVE_SECONDS = 1
-            pipe_mod._whisper_models.clear()
-            pipe_mod._whisper_models_last_used.clear()
-            pipe_mod._eviction_thread_started = False
+            _reset_pipeline(pipe_mod, keep_alive_seconds=1)
 
             from app.main import app
 
@@ -381,29 +341,8 @@ class TestIdleModelEviction:
                 # Simulate idle: set last_used far in the past
                 pipe_mod._whisper_models_last_used["tiny"] = time.time() - 100
 
-                # Run eviction sweep manually
-                now = time.time()
-                candidates = [
-                    name
-                    for name, last in list(pipe_mod._whisper_models_last_used.items())
-                    if now - last > pipe_mod.MODEL_KEEP_ALIVE_SECONDS
-                    and name in pipe_mod._whisper_models
-                ]
-                for name in candidates:
-                    with pipe_mod._model_load_lock:
-                        last = pipe_mod._whisper_models_last_used.get(name, 0)
-                        if (
-                            name in pipe_mod._whisper_models
-                            and now - last > pipe_mod.MODEL_KEEP_ALIVE_SECONDS
-                        ):
-                            del pipe_mod._whisper_models[name]
-                            pipe_mod._whisper_models_last_used.pop(name, None)
-                            try:
-                                from app import metrics as prom_metrics
-
-                                prom_metrics.MODEL_EVICTIONS_TOTAL.labels(model=name).inc()
-                            except Exception:
-                                pass
+                # Call the REAL eviction sweep function
+                pipe_mod._run_eviction_sweep()
 
                 # Now /health should NOT list tiny
                 health2 = c.get("/health")
@@ -411,7 +350,8 @@ class TestIdleModelEviction:
 
     def test_eviction_counter_in_metrics_output(self):
         """
-        After eviction, /metrics exposes whisperx_model_evictions_total{model="tiny"} >= 1.
+        After ``_run_eviction_sweep()`` evicts a model, /metrics exposes
+        whisperx_model_evictions_total{model="tiny"} >= 1.
         """
         wmlx = _make_whispermlx_mock()
         with (
@@ -431,10 +371,7 @@ class TestIdleModelEviction:
         ):
             import app.pipeline as pipe_mod
 
-            pipe_mod.MODEL_KEEP_ALIVE_SECONDS = 1
-            pipe_mod._whisper_models.clear()
-            pipe_mod._whisper_models_last_used.clear()
-            pipe_mod._eviction_thread_started = False
+            _reset_pipeline(pipe_mod, keep_alive_seconds=1)
 
             from app.main import app
 
@@ -442,21 +379,9 @@ class TestIdleModelEviction:
                 # Load tiny via a request
                 _post_asr(c, model="tiny")
 
-                # Simulate idle and run eviction
+                # Simulate idle and run the REAL eviction sweep
                 pipe_mod._whisper_models_last_used["tiny"] = time.time() - 100
-
-                now = time.time()
-                for name in list(pipe_mod._whisper_models_last_used.keys()):
-                    last = pipe_mod._whisper_models_last_used.get(name, 0)
-                    if (
-                        now - last > pipe_mod.MODEL_KEEP_ALIVE_SECONDS
-                        and name in pipe_mod._whisper_models
-                    ):
-                        del pipe_mod._whisper_models[name]
-                        pipe_mod._whisper_models_last_used.pop(name, None)
-                        from app import metrics as prom_metrics
-
-                        prom_metrics.MODEL_EVICTIONS_TOTAL.labels(model=name).inc()
+                pipe_mod._run_eviction_sweep()
 
                 # Check /metrics output
                 metrics_resp = c.get("/metrics")
@@ -479,11 +404,15 @@ class TestTransparentReloadAfterEviction:
     VAL-CROSS-015: After eviction, a subsequent request with the same model
     still returns HTTP 200 (the evicted model reloads transparently) and the
     model reappears in /health loaded_models.
+
+    These tests call the REAL ``_run_eviction_sweep()`` function to evict
+    models, exercising the actual pipeline eviction code path.
     """
 
     def test_request_succeeds_after_eviction(self):
         """
-        A POST /asr with model=tiny succeeds after the model was evicted.
+        A POST /asr with model=tiny succeeds after the model was evicted
+        by ``_run_eviction_sweep()``.
         """
         wmlx = _make_whispermlx_mock()
         with (
@@ -503,10 +432,7 @@ class TestTransparentReloadAfterEviction:
         ):
             import app.pipeline as pipe_mod
 
-            pipe_mod.MODEL_KEEP_ALIVE_SECONDS = 1
-            pipe_mod._whisper_models.clear()
-            pipe_mod._whisper_models_last_used.clear()
-            pipe_mod._eviction_thread_started = False
+            _reset_pipeline(pipe_mod, keep_alive_seconds=1)
 
             from app.main import app
 
@@ -516,20 +442,9 @@ class TestTransparentReloadAfterEviction:
                 assert resp1.status_code == 200
                 assert "tiny" in c.get("/health").json()["loaded_models"]
 
-                # Simulate idle and evict
+                # Simulate idle and evict using the REAL sweep function
                 pipe_mod._whisper_models_last_used["tiny"] = time.time() - 100
-                now = time.time()
-                for name in list(pipe_mod._whisper_models_last_used.keys()):
-                    last = pipe_mod._whisper_models_last_used.get(name, 0)
-                    if (
-                        now - last > pipe_mod.MODEL_KEEP_ALIVE_SECONDS
-                        and name in pipe_mod._whisper_models
-                    ):
-                        del pipe_mod._whisper_models[name]
-                        pipe_mod._whisper_models_last_used.pop(name, None)
-                        from app import metrics as prom_metrics
-
-                        prom_metrics.MODEL_EVICTIONS_TOTAL.labels(model=name).inc()
+                pipe_mod._run_eviction_sweep()
 
                 # Verify eviction happened
                 assert "tiny" not in c.get("/health").json()["loaded_models"]
@@ -561,10 +476,7 @@ class TestTransparentReloadAfterEviction:
         ):
             import app.pipeline as pipe_mod
 
-            pipe_mod.MODEL_KEEP_ALIVE_SECONDS = 1
-            pipe_mod._whisper_models.clear()
-            pipe_mod._whisper_models_last_used.clear()
-            pipe_mod._eviction_thread_started = False
+            _reset_pipeline(pipe_mod, keep_alive_seconds=1)
 
             from app.main import app
 
@@ -573,18 +485,8 @@ class TestTransparentReloadAfterEviction:
                 _post_asr(c, model="tiny")
                 pipe_mod._whisper_models_last_used["tiny"] = time.time() - 100
 
-                now = time.time()
-                for name in list(pipe_mod._whisper_models_last_used.keys()):
-                    last = pipe_mod._whisper_models_last_used.get(name, 0)
-                    if (
-                        now - last > pipe_mod.MODEL_KEEP_ALIVE_SECONDS
-                        and name in pipe_mod._whisper_models
-                    ):
-                        del pipe_mod._whisper_models[name]
-                        pipe_mod._whisper_models_last_used.pop(name, None)
-                        from app import metrics as prom_metrics
-
-                        prom_metrics.MODEL_EVICTIONS_TOTAL.labels(model=name).inc()
+                # Evict using the REAL sweep function
+                pipe_mod._run_eviction_sweep()
 
                 # tiny is evicted
                 assert "tiny" not in c.get("/health").json()["loaded_models"]
@@ -599,7 +501,8 @@ class TestTransparentReloadAfterEviction:
 
     def test_eviction_counter_cumulative_after_multiple_evictions(self):
         """
-        Evicting the same model twice increments the counter to >= 2.
+        Evicting the same model twice via ``_run_eviction_sweep()`` increments
+        the counter to >= 2.
         """
         wmlx = _make_whispermlx_mock()
         with (
@@ -619,43 +522,20 @@ class TestTransparentReloadAfterEviction:
         ):
             import app.pipeline as pipe_mod
 
-            pipe_mod.MODEL_KEEP_ALIVE_SECONDS = 1
-            pipe_mod._whisper_models.clear()
-            pipe_mod._whisper_models_last_used.clear()
-            pipe_mod._eviction_thread_started = False
+            _reset_pipeline(pipe_mod, keep_alive_seconds=1)
 
             from app.main import app
 
             with TestClient(app) as c:
-                from app import metrics as prom_metrics
-
                 # First load + evict cycle
                 _post_asr(c, model="tiny")
                 pipe_mod._whisper_models_last_used["tiny"] = time.time() - 100
-                now = time.time()
-                for name in list(pipe_mod._whisper_models_last_used.keys()):
-                    last = pipe_mod._whisper_models_last_used.get(name, 0)
-                    if (
-                        now - last > pipe_mod.MODEL_KEEP_ALIVE_SECONDS
-                        and name in pipe_mod._whisper_models
-                    ):
-                        del pipe_mod._whisper_models[name]
-                        pipe_mod._whisper_models_last_used.pop(name, None)
-                        prom_metrics.MODEL_EVICTIONS_TOTAL.labels(model=name).inc()
+                pipe_mod._run_eviction_sweep()
 
                 # Second load + evict cycle
                 _post_asr(c, model="tiny")
                 pipe_mod._whisper_models_last_used["tiny"] = time.time() - 100
-                now = time.time()
-                for name in list(pipe_mod._whisper_models_last_used.keys()):
-                    last = pipe_mod._whisper_models_last_used.get(name, 0)
-                    if (
-                        now - last > pipe_mod.MODEL_KEEP_ALIVE_SECONDS
-                        and name in pipe_mod._whisper_models
-                    ):
-                        del pipe_mod._whisper_models[name]
-                        pipe_mod._whisper_models_last_used.pop(name, None)
-                        prom_metrics.MODEL_EVICTIONS_TOTAL.labels(model=name).inc()
+                pipe_mod._run_eviction_sweep()
 
                 # Counter should be >= 2
                 metrics_body = c.get("/metrics").text
@@ -669,6 +549,7 @@ class TestTransparentReloadAfterEviction:
     def test_non_evicted_model_stays_loaded(self):
         """
         Only idle models are evicted; recently-used models stay in cache.
+        ``_run_eviction_sweep()`` should only evict models past the keep-alive.
         """
         wmlx = _make_whispermlx_mock()
         with (
@@ -688,10 +569,7 @@ class TestTransparentReloadAfterEviction:
         ):
             import app.pipeline as pipe_mod
 
-            pipe_mod.MODEL_KEEP_ALIVE_SECONDS = 1
-            pipe_mod._whisper_models.clear()
-            pipe_mod._whisper_models_last_used.clear()
-            pipe_mod._eviction_thread_started = False
+            _reset_pipeline(pipe_mod, keep_alive_seconds=1)
 
             from app.main import app
 
@@ -704,19 +582,8 @@ class TestTransparentReloadAfterEviction:
                 pipe_mod._whisper_models_last_used["tiny"] = time.time() - 100
                 # base is recent (default from load_whisper_model, should be current)
 
-                # Run eviction sweep
-                now = time.time()
-                for name in list(pipe_mod._whisper_models_last_used.keys()):
-                    last = pipe_mod._whisper_models_last_used.get(name, 0)
-                    if (
-                        now - last > pipe_mod.MODEL_KEEP_ALIVE_SECONDS
-                        and name in pipe_mod._whisper_models
-                    ):
-                        del pipe_mod._whisper_models[name]
-                        pipe_mod._whisper_models_last_used.pop(name, None)
-                        from app import metrics as prom_metrics
-
-                        prom_metrics.MODEL_EVICTIONS_TOTAL.labels(model=name).inc()
+                # Run the REAL eviction sweep
+                pipe_mod._run_eviction_sweep()
 
                 # tiny evicted, base stays
                 loaded = c.get("/health").json()["loaded_models"]

@@ -1,15 +1,65 @@
 """Shared fixtures for unit tests (whispermlx mocked, fast, no model downloads)."""
 
 from unittest.mock import MagicMock, patch
+
 import pytest
 
 
+def pytest_collection_modifyitems(config, items):
+    """Auto-mark every test collected under tests/unit with the ``unit`` marker.
+
+    This lets callers run ``pytest -m unit`` (or exclude with ``-m "not unit"``)
+    without requiring each test file to add decorators individually.
+    """
+    unit_marker = pytest.mark.unit
+    for item in items:
+        item.add_marker(unit_marker)
+
+
 @pytest.fixture(autouse=True)
-def _reset_pipeline_caches():
-    """Reset pipeline module-level caches between tests to avoid cross-contamination."""
-    # We reload the module for each test by not caching imports at module level.
-    # Individual tests handle their own patching.
+def _reset_pipeline_state():
+    """Reset pipeline module-level caches between tests to avoid cross-contamination.
+
+    Clears the whisper model cache, last-used timestamps, and the eviction
+    thread flag so each test starts from a clean state regardless of what
+    prior tests loaded.
+
+    CRITICAL: ``test_pipeline_transcribe`` calls ``importlib.reload(app.pipeline)``
+    which replaces ``_whisper_models`` with a new dict.  ``app.main`` still holds
+    a reference to the *old* dict via ``from app.pipeline import _whisper_models
+    as loaded_models``.  We re-link ``app.main.loaded_models`` to the current
+    ``app.pipeline._whisper_models`` so TestClient-based tests see the same dict
+    the pipeline code mutates.
+    """
+    try:
+        import app.pipeline as pipe_mod
+
+        pipe_mod._whisper_models.clear()
+        pipe_mod._whisper_models_last_used.clear()
+        pipe_mod._eviction_thread_started = False
+    except ImportError:
+        pass
+
+    # Re-link app.main.loaded_models to the (possibly reloaded) pipeline dict
+    try:
+        import app.main as main_mod
+        import app.pipeline as pipe_mod
+
+        main_mod.loaded_models = pipe_mod._whisper_models
+    except (ImportError, AttributeError):
+        pass
+
     yield
+
+    # Clean up after the test as well
+    try:
+        import app.pipeline as pipe_mod
+
+        pipe_mod._whisper_models.clear()
+        pipe_mod._whisper_models_last_used.clear()
+        pipe_mod._eviction_thread_started = False
+    except ImportError:
+        pass
 
 
 @pytest.fixture()
@@ -21,9 +71,14 @@ def mock_whispermlx():
     """
     mock_module = MagicMock()
     mock_module.load_model.return_value = MagicMock()
-    mock_module.load_align_model.return_value = (MagicMock(), {"language": "en", "dictionary": {}, "type": "huggingface"})
+    mock_module.load_align_model.return_value = (
+        MagicMock(),
+        {"language": "en", "dictionary": {}, "type": "huggingface"},
+    )
     mock_module.align.return_value = {
-        "segments": [{"start": 0.0, "end": 1.0, "text": "hello", "words": [{"word": "hello", "start": 0.0, "end": 1.0}]}],
+        "segments": [
+            {"start": 0.0, "end": 1.0, "text": "hello", "words": [{"word": "hello", "start": 0.0, "end": 1.0}]}
+        ],
         "word_segments": [{"word": "hello", "start": 0.0, "end": 1.0}],
     }
     mock_module.load_audio.return_value = MagicMock()

@@ -194,34 +194,48 @@ def _ensure_eviction_thread():
         )
 
 
+def _run_eviction_sweep() -> bool:
+    """Run a single eviction sweep over the cached Whisper models.
+
+    Evicts any model whose last-used timestamp is older than
+    ``MODEL_KEEP_ALIVE_SECONDS``.  Returns ``True`` if at least one model
+    was evicted (so the caller can decide whether to clear GPU memory).
+
+    This is extracted from ``_eviction_loop`` so unit tests can exercise
+    the real eviction code path without duplicating the sweep logic.
+    """
+    if MODEL_KEEP_ALIVE_SECONDS <= 0:
+        return False
+    now = time.time()
+    candidates = [
+        name
+        for name, last in list(_whisper_models_last_used.items())
+        if now - last > MODEL_KEEP_ALIVE_SECONDS and name in _whisper_models
+    ]
+    evicted_any = False
+    for name in candidates:
+        with _model_load_lock:
+            last = _whisper_models_last_used.get(name, 0)
+            if name in _whisper_models and now - last > MODEL_KEEP_ALIVE_SECONDS:
+                logger.info(f"Evicting idle model {name}")
+                del _whisper_models[name]
+                _whisper_models_last_used.pop(name, None)
+                evicted_any = True
+                try:
+                    from app import metrics as prom_metrics
+
+                    prom_metrics.MODEL_EVICTIONS_TOTAL.labels(model=name).inc()
+                except Exception:
+                    pass
+    if evicted_any:
+        clear_gpu_memory()
+    return evicted_any
+
+
 def _eviction_loop():
     while True:
         time.sleep(MODEL_EVICTION_INTERVAL_SECONDS)
-        if MODEL_KEEP_ALIVE_SECONDS <= 0:
-            continue
-        now = time.time()
-        candidates = [
-            name
-            for name, last in list(_whisper_models_last_used.items())
-            if now - last > MODEL_KEEP_ALIVE_SECONDS and name in _whisper_models
-        ]
-        evicted_any = False
-        for name in candidates:
-            with _model_load_lock:
-                last = _whisper_models_last_used.get(name, 0)
-                if name in _whisper_models and now - last > MODEL_KEEP_ALIVE_SECONDS:
-                    logger.info(f"Evicting idle model {name}")
-                    del _whisper_models[name]
-                    _whisper_models_last_used.pop(name, None)
-                    evicted_any = True
-                    try:
-                        from app import metrics as prom_metrics
-
-                        prom_metrics.MODEL_EVICTIONS_TOTAL.labels(model=name).inc()
-                    except Exception:
-                        pass
-        if evicted_any:
-            clear_gpu_memory()
+        _run_eviction_sweep()
 
 
 def load_align_model(language_code: str):

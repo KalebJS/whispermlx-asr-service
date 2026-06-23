@@ -8,14 +8,12 @@ All tests mock whispermlx so no real model downloads occur.
 
 import io
 import os
-import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -179,10 +177,7 @@ class TestMetricsRequestsTotal:
         _post_asr(c, params={"output_format": "text"})
         body = c.get("/metrics").text
         # prometheus_client appends _total to counter names in exposition
-        assert (
-            'whisperx_requests_total_total{endpoint=' in body
-            or 'whisperx_requests_total{endpoint=' in body
-        )
+        assert "whisperx_requests_total_total{endpoint=" in body or "whisperx_requests_total{endpoint=" in body
 
 
 # ---------------------------------------------------------------------------
@@ -250,23 +245,49 @@ class TestNoTorchCudaInMetrics:
         refresh_vram()  # should not raise
 
     def test_refresh_vram_sets_gauge_on_success(self):
-        """When mlx.core.get_active_memory exists, VRAM gauge is set to its return."""
+        """When mlx.core.get_active_memory exists, VRAM gauge is set to its return value.
+
+        This test patches ``mlx.core.get_active_memory`` to return a known value
+        and then asserts that the ``whisperx_vram_allocated_bytes`` gauge actually
+        reflects that value after calling ``refresh_vram()``.  Previously this test
+        was a vacuous pass: it patched the function but never checked the gauge.
+        """
         import mlx.core
+        from prometheus_client import generate_latest
+
+        from app.metrics import refresh_vram
 
         original_fn = getattr(mlx.core, "get_active_memory", None)
+        patched_value = 12345678
         try:
-            # If get_active_memory doesn't exist, add it; if it does, replace it
-            mlx.core.get_active_memory = MagicMock(return_value=12345678)
-            from app.metrics import refresh_vram
-
+            # Patch get_active_memory to return a known value
+            mlx.core.get_active_memory = MagicMock(return_value=patched_value)
             refresh_vram()
-            # The gauge value should have been set to 12345678
-            # We verify by reading the metrics output
         finally:
             if original_fn is not None:
                 mlx.core.get_active_memory = original_fn
             elif hasattr(mlx.core, "get_active_memory"):
                 delattr(mlx.core, "get_active_memory")
+
+        # Assert the gauge was actually set to the patched value.
+        # We read the Prometheus exposition output and parse the gauge sample.
+        body = generate_latest().decode("utf-8")
+        found = False
+        for line in body.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                continue
+            if stripped.startswith("whisperx_vram_allocated_bytes ") or stripped.startswith(
+                "whisperx_vram_allocated_bytes{"
+            ):
+                value = float(stripped.split()[-1])
+                assert value == patched_value, (
+                    f"VRAM gauge was {value}, expected {patched_value} "
+                    f"(the patched mlx.core.get_active_memory return value)"
+                )
+                found = True
+                break
+        assert found, "whisperx_vram_allocated_bytes sample line not found in metrics output"
 
 
 # ---------------------------------------------------------------------------
@@ -395,17 +416,13 @@ class TestFailedRequestsTracking:
 
         _post_asr(c, params={"output_format": "text"})
         body_before = c.get("/metrics").text
-        ok_before = _extract_counter_value(
-            body_before, "whisperx_requests_total", {"endpoint": "/asr", "status": "ok"}
-        )
+        ok_before = _extract_counter_value(body_before, "whisperx_requests_total", {"endpoint": "/asr", "status": "ok"})
 
         # Bad request
         _post_asr(c, params={"output_format": "docx"})
 
         body_after = c.get("/metrics").text
-        ok_after = _extract_counter_value(
-            body_after, "whisperx_requests_total", {"endpoint": "/asr", "status": "ok"}
-        )
+        ok_after = _extract_counter_value(body_after, "whisperx_requests_total", {"endpoint": "/asr", "status": "ok"})
 
         assert ok_after == ok_before
 
@@ -500,8 +517,7 @@ class TestOpenAIEndpointMetrics:
 
         body_before = c.get("/metrics").text
         http_400_before = _extract_counter_value(
-            body_before, "whisperx_requests_total",
-            {"endpoint": "/v1/audio/transcriptions", "status": "http_400"}
+            body_before, "whisperx_requests_total", {"endpoint": "/v1/audio/transcriptions", "status": "http_400"}
         )
 
         resp = c.post(
@@ -513,8 +529,7 @@ class TestOpenAIEndpointMetrics:
 
         body_after = c.get("/metrics").text
         http_400_after = _extract_counter_value(
-            body_after, "whisperx_requests_total",
-            {"endpoint": "/v1/audio/transcriptions", "status": "http_400"}
+            body_after, "whisperx_requests_total", {"endpoint": "/v1/audio/transcriptions", "status": "http_400"}
         )
 
         assert http_400_after > http_400_before
@@ -592,7 +607,7 @@ def _extract_counter_value(body: str, metric_name: str, labels: dict[str, str]) 
             continue
         # prometheus_client appends _total to counter names in exposition
         for name_variant in (f"{metric_name}_total", metric_name):
-            prefix = f'{name_variant}{{{label_str}}}'
+            prefix = f"{name_variant}{{{label_str}}}"
             if stripped.startswith(prefix):
                 parts = stripped.split()
                 if len(parts) >= 2:
@@ -617,7 +632,7 @@ def _extract_gauge_value(body: str, metric_name: str) -> float:
         # Match: metric_name <value> or metric_name{...} <value>
         if stripped.startswith(metric_name) and not stripped.startswith(metric_name + "_"):
             # Ensure we're not matching a different metric that starts with the same prefix
-            after_name = stripped[len(metric_name):]
+            after_name = stripped[len(metric_name) :]
             if after_name and after_name[0] not in (" ", "{"):
                 continue
             parts = stripped.split()

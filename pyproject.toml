@@ -18,6 +18,7 @@ dev = [
     "pytest",
     "ruff",
     "commitizen",
+    "httpx",
 ]
 
 [build-system]
