@@ -1,10 +1,10 @@
 # Whispermlx ASR Service
 
-[![Version](https://img.shields.io/badge/version-0.4.0-blue.svg)](https://github.com/murtaza-nasir/whisperx-asr-service/releases/tag/v0.4.0)
+[![Version](https://img.shields.io/badge/version-0.4.0-blue.svg)](https://github.com/KalebJS/whisperx-asr-service/releases/tag/v0.4.0)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Platform: Apple Silicon](https://img.shields.io/badge/Platform-Apple%20Silicon%20%7C%20MLX-5856D6.svg)](https://github.com/ml-explore/mlx)
 [![Python: 3.13](https://img.shields.io/badge/Python-3.13-3776AB.svg)](https://www.python.org/downloads/)
-[![Status](https://img.shields.io/badge/status-alpha-orange.svg)](https://github.com/murtaza-nasir/whisperx-asr-service)
+[![Status](https://img.shields.io/badge/status-alpha-orange.svg)](https://github.com/KalebJS/whisperx-asr-service)
 
 **A native Apple-Silicon ASR API service powered by [whispermlx](https://pypi.org/project/whispermlx/) (MLX) with FastAPI.**
 
@@ -53,6 +53,7 @@ Memory requirements vary by model size:
 | `tiny`, `base` | ~2 GB | Fast, low quality |
 | `small` | ~2.3 GB | Good balance of speed and quality |
 | `medium` | ~5 GB | Good quality, slower |
+| `large-v3-turbo`, `turbo` | ~5 GB | Fast, high quality |
 | `large-v3` | ~10+ GB | Best quality, slowest |
 
 *Full pipeline = Whisper model + alignment model + pyannote speaker diarization. Measured on M1 16 GB.
@@ -74,7 +75,7 @@ Memory requirements vary by model size:
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Clone the repository
-git clone https://github.com/murtaza-nasir/whisperx-asr-service.git
+git clone https://github.com/KalebJS/whisperx-asr-service.git
 cd whisperx-asr-service
 
 # Create a Python 3.13 virtual environment and install dependencies
@@ -122,14 +123,22 @@ PORT=9001
 ### 4. Run the Service
 
 ```bash
-# Start the service (loads .env automatically via entrypoint.sh)
+# Export your .env vars first (entrypoint.sh does NOT auto-load .env)
+set -a; source .env; set +a
+
+# Start the service (binds 0.0.0.0:9001)
 ./entrypoint.sh
 
-# Or start directly with uvicorn
+# Or start directly with uvicorn (binds localhost only)
 uv run uvicorn app.main:app --host 127.0.0.1 --port 9001
+
+# Or load .env and start in one step
+uv run uvicorn app.main:app --host 127.0.0.1 --port 9001 --env-file .env
 ```
 
 The service will be available at `http://localhost:9001`.
+
+> **Note:** `entrypoint.sh` hardcodes port 9001 and binds to `0.0.0.0` (all interfaces). The `PORT` env var is only respected when launching uvicorn directly with `--port $PORT`. Since the service has no authentication, prefer `--host 127.0.0.1` unless you need remote access.
 
 > Port 9001 is the default. Port 9000 may be in use by other services (e.g., php-fpm on some macOS setups). The reserved port range for this service is 9001-9010.
 
@@ -385,14 +394,20 @@ Edit `.env` to customize:
 DEVICE=cpu              # cpu (default) or mps (experimental)
 
 # Compute type and batch size (accepted but INERT under MLX — no effect on inference)
-#COMPUTE_TYPE=float16
-#BATCH_SIZE=16
+# Code defaults: COMPUTE_TYPE=int8, BATCH_SIZE=2 (leftover from CUDA era, unused)
+#COMPUTE_TYPE=int8
+#BATCH_SIZE=2
 
 # Hugging Face token for diarization (REQUIRED for speaker labels)
 HF_TOKEN=hf_xxx...
 
 # Model preloading (optional, reduces first-request latency)
+# Also sets the default model for /asr requests when no model= param is given
 PRELOAD_MODEL=large-v3   # Leave empty to disable
+
+# Override which model the OpenAI "whisper-1" alias resolves to
+# (defaults to the PRELOAD_MODEL value, or large-v3 if unset)
+#OPENAI_WHISPER1_MODEL=large-v3
 
 # Service port (default 9001)
 PORT=9001
@@ -445,22 +460,28 @@ ASR_BASE_URL=http://localhost:9001
 
 If the service is on a different machine, replace `localhost` with the IP address and ensure the port is accessible through your firewall.
 
+**If Speakr runs in Docker:** `localhost` inside a container refers to the container itself, not the host. Use `host.docker.internal` instead:
+
+```bash
+ASR_BASE_URL=http://host.docker.internal:9001
+```
+
+**Model compatibility:** `distil-*` models (e.g., `distil-large-v2`) are no longer available on the MLX backend. If Speakr was configured to use a `distil-*` model, switch to a standard model name such as `large-v3`, `small`, or `large-v3-turbo`. The `hotwords` parameter is accepted but silently ignored; use `initial_prompt` for spelling bias instead.
+
 ---
 
 ## Running the Service
 
 ```bash
-# Using entrypoint.sh (loads .env and starts uvicorn)
+# Using entrypoint.sh (exports .env first; binds 0.0.0.0:9001)
+set -a; source .env; set +a
 ./entrypoint.sh
 
-# Or directly with uvicorn
-uv run uvicorn app.main:app --host 127.0.0.1 --port 9001
+# Or directly with uvicorn (localhost only, auto-loads .env)
+uv run uvicorn app.main:app --host 127.0.0.1 --port 9001 --env-file .env
 
-# With environment variables inline
+# With environment variables inline (no .env needed)
 DEVICE=cpu PRELOAD_MODEL=base uv run uvicorn app.main:app --host 127.0.0.1 --port 9001
-
-# View logs (foreground)
-uv run uvicorn app.main:app --host 127.0.0.1 --port 9001
 ```
 
 ---
@@ -490,7 +511,8 @@ The service will now operate without any network requests to Hugging Face.
 When running in the foreground, logs appear in the terminal. When running in the background:
 
 ```bash
-# If started via entrypoint.sh in the background
+# Export .env first, then start in the background
+set -a; source .env; set +a
 ./entrypoint.sh &> service.log &
 tail -f service.log
 ```

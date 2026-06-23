@@ -1,6 +1,6 @@
 MIT License
 
-Copyright (c) 2025 WhisperX ASR Service
+Copyright (c) 2025-2026 Kaleb Smith
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -24,10 +24,16 @@ SOFTWARE.
 
 This project uses the following open-source components:
 
+whispermlx (https://pypi.org/project/whispermlx/)
+MLX fork of WhisperX for Apple Silicon
+
 WhisperX (https://github.com/m-bain/whisperX)
 License: BSD-4-Clause
 
 OpenAI Whisper (https://github.com/openai/whisper)
+License: MIT
+
+MLX (https://github.com/ml-explore/mlx)
 License: MIT
 
 Pyannote.audio (https://github.com/pyannote/pyannote-audio)
