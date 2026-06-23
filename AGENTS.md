@@ -66,6 +66,7 @@ uv run ruff format app tests
 - Tag format: `v$version` (semver). Changelog auto-updates on bump.
 - Keep commits focused and atomic. Reference validation IDs (e.g., `VAL-DIAR-021`) when fixing tracked issues.
 - PRs should include a clear description of what changed and why, and link any related issues.
+- **Never use `git push --tags` or `git push --all`.** This repo was forked and inherited upstream tags (v0.2.0-v0.3.2) that were deleted. Pushing all tags would re-push stale upstream tags. Use `git push origin <tag>` to push individual tags created by `cz bump` only.
 
 ## Upstream & Project History
 
