@@ -5,14 +5,12 @@ Covers: response formats, model resolution, temperature validation,
 timestamp_granularities, error envelopes, prompt/hotwords handling.
 """
 
-import io
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -63,9 +61,20 @@ def _make_pipeline_result(
 
 # Canonical MLX model list used by resolve_model_name
 CANONICAL_MODELS = [
-    "tiny", "tiny.en", "base", "base.en", "small", "small.en",
-    "medium", "medium.en", "large", "large-v1", "large-v2",
-    "large-v3", "large-v3-turbo", "turbo",
+    "tiny",
+    "tiny.en",
+    "base",
+    "base.en",
+    "small",
+    "small.en",
+    "medium",
+    "medium.en",
+    "large",
+    "large-v1",
+    "large-v2",
+    "large-v3",
+    "large-v3-turbo",
+    "turbo",
 ]
 
 
@@ -103,7 +112,7 @@ def client():
             if m in aliases:
                 return aliases[m]
             if m.startswith("whisper-"):
-                stripped = m[len("whisper-"):]
+                stripped = m[len("whisper-") :]
                 if stripped in CANONICAL_MODELS:
                     return stripped
             return m
@@ -142,6 +151,7 @@ def _post_transcriptions(client, data: dict, files=None):
 # VAL-OAI-001: default response_format returns JSON {text}
 # ===================================================================
 
+
 class TestDefaultJsonFormat:
     """POST /v1/audio/transcriptions with no response_format -> {text}."""
 
@@ -167,8 +177,8 @@ class TestDefaultJsonFormat:
 # VAL-OAI-002: explicit response_format=json returns {text}
 # ===================================================================
 
-class TestExplicitJsonFormat:
 
+class TestExplicitJsonFormat:
     def test_explicit_json_returns_text_only(self, client):
         c, _, _ = client
         resp = _post_transcriptions(c, {"model": "whisper-1", "response_format": "json"})
@@ -186,8 +196,8 @@ class TestExplicitJsonFormat:
 # VAL-OAI-003: response_format=text returns plain text
 # ===================================================================
 
-class TestTextFormat:
 
+class TestTextFormat:
     def test_text_format_returns_plain_text(self, client):
         c, _, _ = client
         resp = _post_transcriptions(c, {"model": "whisper-1", "response_format": "text"})
@@ -208,8 +218,8 @@ class TestTextFormat:
 # VAL-OAI-004 + VAL-OAI-035: srt format + Content-Type text/plain
 # ===================================================================
 
-class TestSrtFormat:
 
+class TestSrtFormat:
     def test_srt_returns_valid_cues(self, client):
         c, _, _ = client
         resp = _post_transcriptions(c, {"model": "whisper-1", "response_format": "srt"})
@@ -220,6 +230,7 @@ class TestSrtFormat:
         assert "-->" in body
         # Comma decimal separator in SRT timecodes
         import re
+
         timecode_pattern = r"\d{2}:\d{2}:\d{2},\d{3}\s*-->\s*\d{2}:\d{2}:\d{2},\d{3}"
         assert re.search(timecode_pattern, body), f"No SRT timecode found in: {body!r}"
 
@@ -235,8 +246,8 @@ class TestSrtFormat:
 # VAL-OAI-005: vtt format returns WEBVTT
 # ===================================================================
 
-class TestVttFormat:
 
+class TestVttFormat:
     def test_vtt_returns_webvtt_header(self, client):
         c, _, _ = client
         resp = _post_transcriptions(c, {"model": "whisper-1", "response_format": "vtt"})
@@ -245,6 +256,7 @@ class TestVttFormat:
         assert body.startswith("WEBVTT")
         # Period decimal separator in VTT timecodes
         import re
+
         timecode_pattern = r"\d{2}:\d{2}:\d{2}\.\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}\.\d{3}"
         assert re.search(timecode_pattern, body), f"No VTT timecode found in: {body!r}"
 
@@ -259,8 +271,8 @@ class TestVttFormat:
 # VAL-OAI-006 + VAL-OAI-007 + VAL-OAI-008: verbose_json
 # ===================================================================
 
-class TestVerboseJsonFormat:
 
+class TestVerboseJsonFormat:
     def test_verbose_json_returns_full_object(self, client):
         c, _, _ = client
         resp = _post_transcriptions(c, {"model": "whisper-1", "response_format": "verbose_json"})
@@ -308,15 +320,18 @@ class TestVerboseJsonFormat:
 # VAL-OAI-009: verbose_json + timestamp_granularities[]=segment
 # ===================================================================
 
-class TestTimestampGranularitiesSegment:
 
+class TestTimestampGranularitiesSegment:
     def test_segment_granularity_has_segments(self, client):
         c, _, _ = client
-        resp = _post_transcriptions(c, {
-            "model": "whisper-1",
-            "response_format": "verbose_json",
-            "timestamp_granularities[]": "segment",
-        })
+        resp = _post_transcriptions(
+            c,
+            {
+                "model": "whisper-1",
+                "response_format": "verbose_json",
+                "timestamp_granularities[]": "segment",
+            },
+        )
         assert resp.status_code == 200
         body = resp.json()
         assert len(body["segments"]) > 0
@@ -326,15 +341,18 @@ class TestTimestampGranularitiesSegment:
 # VAL-OAI-010: verbose_json + timestamp_granularities[]=word -> words[]
 # ===================================================================
 
-class TestTimestampGranularitiesWord:
 
+class TestTimestampGranularitiesWord:
     def test_word_granularity_includes_words(self, client):
         c, _, _ = client
-        resp = _post_transcriptions(c, {
-            "model": "whisper-1",
-            "response_format": "verbose_json",
-            "timestamp_granularities[]": "word",
-        })
+        resp = _post_transcriptions(
+            c,
+            {
+                "model": "whisper-1",
+                "response_format": "verbose_json",
+                "timestamp_granularities[]": "word",
+            },
+        )
         assert resp.status_code == 200
         body = resp.json()
         assert "words" in body
@@ -351,15 +369,18 @@ class TestTimestampGranularitiesWord:
 # VAL-OAI-011 + VAL-CROSS-003: both segment and word granularities
 # ===================================================================
 
-class TestBothGranularities:
 
+class TestBothGranularities:
     def test_both_granularities_has_segments_and_words(self, client):
         c, _, _ = client
-        resp = _post_transcriptions(c, {
-            "model": "whisper-1",
-            "response_format": "verbose_json",
-            "timestamp_granularities[]": ["segment", "word"],
-        })
+        resp = _post_transcriptions(
+            c,
+            {
+                "model": "whisper-1",
+                "response_format": "verbose_json",
+                "timestamp_granularities[]": ["segment", "word"],
+            },
+        )
         assert resp.status_code == 200
         body = resp.json()
         assert len(body["segments"]) > 0
@@ -371,15 +392,18 @@ class TestBothGranularities:
 # VAL-OAI-012: timestamp_granularities without verbose_json -> 400
 # ===================================================================
 
-class TestTimestampGranularitiesWithoutVerboseJson:
 
+class TestTimestampGranularitiesWithoutVerboseJson:
     def test_granularities_with_json_format_returns_400(self, client):
         c, _, _ = client
-        resp = _post_transcriptions(c, {
-            "model": "whisper-1",
-            "response_format": "json",
-            "timestamp_granularities[]": "word",
-        })
+        resp = _post_transcriptions(
+            c,
+            {
+                "model": "whisper-1",
+                "response_format": "json",
+                "timestamp_granularities[]": "word",
+            },
+        )
         assert resp.status_code == 400
         body = resp.json()
         assert "error" in body
@@ -388,11 +412,14 @@ class TestTimestampGranularitiesWithoutVerboseJson:
 
     def test_granularities_with_text_format_returns_400(self, client):
         c, _, _ = client
-        resp = _post_transcriptions(c, {
-            "model": "whisper-1",
-            "response_format": "text",
-            "timestamp_granularities[]": "word",
-        })
+        resp = _post_transcriptions(
+            c,
+            {
+                "model": "whisper-1",
+                "response_format": "text",
+                "timestamp_granularities[]": "word",
+            },
+        )
         assert resp.status_code == 400
 
 
@@ -400,8 +427,8 @@ class TestTimestampGranularitiesWithoutVerboseJson:
 # VAL-OAI-013 + VAL-OAI-014: temperature out of range -> 400 OpenAI envelope
 # ===================================================================
 
-class TestTemperatureValidation:
 
+class TestTemperatureValidation:
     def test_temperature_above_range_returns_400_openai_envelope(self, client):
         """VAL-OAI-013: temperature=1.5 -> 400 with OpenAI envelope."""
         c, _, _ = client
@@ -447,8 +474,8 @@ class TestTemperatureValidation:
 # VAL-OAI-016/017/018: model aliases
 # ===================================================================
 
-class TestModelAliases:
 
+class TestModelAliases:
     def test_whisper_1_alias_resolves(self, client):
         """VAL-OAI-016: whisper-1 resolves to default model."""
         c, mock_queue, _ = client
@@ -473,8 +500,8 @@ class TestModelAliases:
 # VAL-OAI-019: raw MLX model name accepted
 # ===================================================================
 
-class TestRawMLXModelNames:
 
+class TestRawMLXModelNames:
     def test_tiny_model_accepted(self, client):
         c, _, _ = client
         resp = _post_transcriptions(c, {"model": "tiny"})
@@ -495,8 +522,8 @@ class TestRawMLXModelNames:
 # VAL-OAI-020: invalid model -> 400 OpenAI error
 # ===================================================================
 
-class TestInvalidModel:
 
+class TestInvalidModel:
     def test_invalid_model_returns_400_openai_error(self, client):
         c, _, _ = client
         resp = _post_transcriptions(c, {"model": "gpt-4o"})
@@ -511,8 +538,8 @@ class TestInvalidModel:
 # VAL-OAI-021: missing model -> client error with OpenAI envelope
 # ===================================================================
 
-class TestMissingModel:
 
+class TestMissingModel:
     def test_missing_model_returns_4xx(self, client):
         c, _, _ = client
         # Don't include model in the form data
@@ -541,8 +568,8 @@ class TestMissingModel:
 # VAL-OAI-022: missing file -> client error with OpenAI envelope
 # ===================================================================
 
-class TestMissingFile:
 
+class TestMissingFile:
     def test_missing_file_returns_4xx(self, client):
         c, _, _ = client
         resp = c.post(
@@ -570,8 +597,8 @@ class TestMissingFile:
 # VAL-OAI-023: prompt accepted as initial_prompt
 # ===================================================================
 
-class TestPrompt:
 
+class TestPrompt:
     def test_prompt_accepted(self, client):
         """VAL-OAI-023: prompt parameter is accepted (200)."""
         c, mock_queue, _ = client
@@ -583,8 +610,8 @@ class TestPrompt:
 # VAL-OAI-024: hotwords accepted but no-op
 # ===================================================================
 
-class TestHotwords:
 
+class TestHotwords:
     def test_hotwords_accepted_no_error(self, client):
         """VAL-OAI-024: hotwords parameter is accepted (200)."""
         c, _, _ = client
@@ -597,8 +624,8 @@ class TestHotwords:
 # VAL-OAI-025: OpenAI error envelope shape
 # ===================================================================
 
-class TestOpenAIErrorEnvelope:
 
+class TestOpenAIErrorEnvelope:
     def test_error_has_openai_envelope(self, client):
         """Error responses use {error: {message, type, param, code}} shape."""
         c, _, _ = client
@@ -641,8 +668,8 @@ class TestOpenAIErrorEnvelope:
 # VAL-OAI-033: json/text transcript text matches
 # ===================================================================
 
-class TestTextConsistency:
 
+class TestTextConsistency:
     def test_json_and_text_formats_agree(self, client):
         c, _, _ = client
         # JSON format
@@ -662,11 +689,14 @@ class TestTextConsistency:
         resp_json = _post_transcriptions(c, {"model": "whisper-1", "response_format": "json"})
         json_text = resp_json.json()["text"].strip()
 
-        resp_verbose = _post_transcriptions(c, {
-            "model": "whisper-1",
-            "response_format": "verbose_json",
-            "timestamp_granularities[]": ["segment", "word"],
-        })
+        resp_verbose = _post_transcriptions(
+            c,
+            {
+                "model": "whisper-1",
+                "response_format": "verbose_json",
+                "timestamp_granularities[]": ["segment", "word"],
+            },
+        )
         verbose_text = resp_verbose.json()["text"].strip()
 
         assert json_text == verbose_text
@@ -676,15 +706,18 @@ class TestTextConsistency:
 # VAL-CROSS-004: verbose_json text equals concatenation of segments
 # ===================================================================
 
-class TestVerboseJsonTextConsistency:
 
+class TestVerboseJsonTextConsistency:
     def test_text_equals_segment_concatenation(self, client):
         c, _, _ = client
-        resp = _post_transcriptions(c, {
-            "model": "whisper-1",
-            "response_format": "verbose_json",
-            "timestamp_granularities[]": ["segment", "word"],
-        })
+        resp = _post_transcriptions(
+            c,
+            {
+                "model": "whisper-1",
+                "response_format": "verbose_json",
+                "timestamp_granularities[]": ["segment", "word"],
+            },
+        )
         assert resp.status_code == 200
         body = resp.json()
         top_text = body["text"].strip()
@@ -696,15 +729,18 @@ class TestVerboseJsonTextConsistency:
 # VAL-OAI-037: word timestamps globally time-ordered
 # ===================================================================
 
-class TestWordTimestampOrdering:
 
+class TestWordTimestampOrdering:
     def test_word_timestamps_monotonically_non_decreasing(self, client):
         c, _, _ = client
-        resp = _post_transcriptions(c, {
-            "model": "whisper-1",
-            "response_format": "verbose_json",
-            "timestamp_granularities[]": "word",
-        })
+        resp = _post_transcriptions(
+            c,
+            {
+                "model": "whisper-1",
+                "response_format": "verbose_json",
+                "timestamp_granularities[]": "word",
+            },
+        )
         assert resp.status_code == 200
         body = resp.json()
         words = body["words"]
@@ -715,7 +751,7 @@ class TestWordTimestampOrdering:
         # Check start times are non-decreasing
         for i in range(1, len(words)):
             assert words[i]["start"] >= words[i - 1]["start"], (
-                f"Word {i} start {words[i]['start']} < word {i-1} start {words[i-1]['start']}"
+                f"Word {i} start {words[i]['start']} < word {i - 1} start {words[i - 1]['start']}"
             )
 
 
@@ -723,8 +759,8 @@ class TestWordTimestampOrdering:
 # VAL-OAI-038: MLX-specific canonical model ids accepted
 # ===================================================================
 
-class TestMLXSpecificModels:
 
+class TestMLXSpecificModels:
     def test_large_v3_turbo_accepted(self, client):
         c, _, _ = client
         resp = _post_transcriptions(c, {"model": "large-v3-turbo"})

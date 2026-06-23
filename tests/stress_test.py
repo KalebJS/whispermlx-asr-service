@@ -23,15 +23,13 @@ Usage:
 """
 
 import argparse
-import os
-import sys
-import time
+import concurrent.futures
 import json
 import statistics
-import concurrent.futures
-from pathlib import Path
+import sys
+import time
 from dataclasses import dataclass, field
-from typing import List, Optional
+from pathlib import Path
 
 import requests
 
@@ -48,16 +46,16 @@ class RequestResult:
     status_code: int
     latency: float  # seconds
     response_size: int  # bytes
-    error: Optional[str] = None
+    error: str | None = None
     segments: int = 0
-    detected_language: Optional[str] = None
+    detected_language: str | None = None
     # Pipeline validation
     has_text: bool = False
     has_word_timestamps: bool = False
     has_speakers: bool = False
     words_with_timestamps: int = 0
-    speakers_found: List[str] = field(default_factory=list)
-    validation_errors: List[str] = field(default_factory=list)
+    speakers_found: list[str] = field(default_factory=list)
+    validation_errors: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -66,7 +64,7 @@ class TestReport:
     workers: int
     rounds: int
     total_files: int
-    results: List[RequestResult] = field(default_factory=list)
+    results: list[RequestResult] = field(default_factory=list)
     wall_time: float = 0.0
 
 
@@ -90,10 +88,7 @@ def validate_asr_response(data: dict, result: RequestResult, diarize: bool):
     if not word_segments:
         for seg in segments:
             word_segments.extend(seg.get("words", []))
-    result.words_with_timestamps = sum(
-        1 for w in word_segments
-        if "start" in w and "end" in w and "word" in w
-    )
+    result.words_with_timestamps = sum(1 for w in word_segments if "start" in w and "end" in w and "word" in w)
     result.has_word_timestamps = result.words_with_timestamps > 0
     if not result.has_word_timestamps:
         result.validation_errors.append("No word-level timestamps (alignment may have failed)")
@@ -125,9 +120,7 @@ def validate_openai_response(data: dict, result: RequestResult):
 
     words = data.get("words", [])
     if words:
-        result.words_with_timestamps = sum(
-            1 for w in words if "start" in w and "end" in w
-        )
+        result.words_with_timestamps = sum(1 for w in words if "start" in w and "end" in w)
         result.has_word_timestamps = result.words_with_timestamps > 0
 
 
@@ -276,8 +269,6 @@ def run_stress_test(
     print("  T=Transcription  A=Alignment  D=Diarization  (Y=pass, N=missing)")
     print("-" * 70)
 
-    sender = send_asr_request if endpoint == "asr" else send_openai_request
-
     wall_start = time.perf_counter()
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
@@ -290,7 +281,6 @@ def run_stress_test(
             futures[fut] = i
 
         for fut in concurrent.futures.as_completed(futures):
-            idx = futures[fut]
             result = fut.result()
             report.results.append(result)
 
@@ -381,7 +371,9 @@ def print_report(report: TestReport):
         print(f"  Transcription:   {with_text}/{len(successes)} have text")
         print(f"  Alignment:       {with_alignment}/{len(successes)} have word timestamps ({total_words} total words)")
         if report.endpoint == "asr":
-            print(f"  Diarization:     {with_speakers}/{len(successes)} have speaker labels ({len(all_speakers)} unique speakers)")
+            print(
+                f"  Diarization:     {with_speakers}/{len(successes)} have speaker labels ({len(all_speakers)} unique speakers)"
+            )
 
         warned = [r for r in successes if r.validation_errors]
         if warned:
@@ -406,16 +398,15 @@ def print_report(report: TestReport):
 def main():
     parser = argparse.ArgumentParser(description="Stress test the WhisperX ASR service")
     parser.add_argument("--url", default=DEFAULT_URL, help="Base URL (default: %(default)s)")
-    parser.add_argument("--endpoint", choices=["asr", "openai"], default="asr",
-                        help="Endpoint to test (default: %(default)s)")
-    parser.add_argument("--workers", type=int, default=4,
-                        help="Number of concurrent workers (default: %(default)s)")
-    parser.add_argument("--rounds", type=int, default=1,
-                        help="Number of rounds (each round sends all files) (default: %(default)s)")
-    parser.add_argument("--model", default=None,
-                        help="Model name (default: tiny for /asr, whisper-1 for openai)")
-    parser.add_argument("--no-diarize", action="store_true",
-                        help="Disable diarization (only for /asr endpoint)")
+    parser.add_argument(
+        "--endpoint", choices=["asr", "openai"], default="asr", help="Endpoint to test (default: %(default)s)"
+    )
+    parser.add_argument("--workers", type=int, default=4, help="Number of concurrent workers (default: %(default)s)")
+    parser.add_argument(
+        "--rounds", type=int, default=1, help="Number of rounds (each round sends all files) (default: %(default)s)"
+    )
+    parser.add_argument("--model", default=None, help="Model name (default: tiny for /asr, whisper-1 for openai)")
+    parser.add_argument("--no-diarize", action="store_true", help="Disable diarization (only for /asr endpoint)")
     args = parser.parse_args()
 
     if args.model is None:

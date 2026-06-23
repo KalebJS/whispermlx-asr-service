@@ -39,6 +39,7 @@ def _import_pipeline():
     import importlib
 
     import app.pipeline
+
     importlib.reload(app.pipeline)
     return app.pipeline
 
@@ -55,26 +56,28 @@ class TestLoadDiarizePipeline:
         """DiarizationPipeline must be called with token=, not use_auth_token=."""
         pipeline = _import_pipeline()
         import inspect
+
         source = inspect.getsource(pipeline.load_diarize_pipeline)
         assert "token=" in source, "load_diarize_pipeline must use token= parameter"
-        assert "use_auth_token=" not in source, \
-            "load_diarize_pipeline must NOT use use_auth_token= (renamed to token=)"
+        assert "use_auth_token=" not in source, "load_diarize_pipeline must NOT use use_auth_token= (renamed to token=)"
 
     def test_model_name_is_pyannote_community(self):
         """DiarizationPipeline model must be pyannote/speaker-diarization-community-1."""
         pipeline = _import_pipeline()
         import inspect
+
         source = inspect.getsource(pipeline.load_diarize_pipeline)
-        assert "pyannote/speaker-diarization-community-1" in source, \
+        assert "pyannote/speaker-diarization-community-1" in source, (
             "DiarizationPipeline must use the community-1 model"
+        )
 
     def test_constructs_with_device(self):
         """DiarizationPipeline must be constructed with device=DEVICE."""
         pipeline = _import_pipeline()
         import inspect
+
         source = inspect.getsource(pipeline.load_diarize_pipeline)
-        assert "device=DEVICE" in source, \
-            "DiarizationPipeline must pass device=DEVICE"
+        assert "device=DEVICE" in source, "DiarizationPipeline must pass device=DEVICE"
 
     def test_actual_construction(self):
         """When loading, the pipeline calls DiarizationPipeline(model_name, token=HF_TOKEN, device=DEVICE)."""
@@ -130,23 +133,26 @@ class TestDiarizeNumpyFed:
         mock_diarize_output = MagicMock()
         mock_diarize_model.return_value = mock_diarize_output
 
-        with patch.object(pipeline, "load_diarize_pipeline", return_value=mock_diarize_model), \
-             patch.object(pipeline.whispermlx, "assign_word_speakers", return_value=result):
+        with (
+            patch.object(pipeline, "load_diarize_pipeline", return_value=mock_diarize_model),
+            patch.object(pipeline.whispermlx, "assign_word_speakers", return_value=result),
+        ):
             pipeline.diarize(audio, result)
 
         # Verify the diarize model was called with the numpy array
         # as the first positional argument, not a file path string
         call_args = mock_diarize_model.call_args
         first_arg = call_args[0][0]
-        assert isinstance(first_arg, np.ndarray), \
+        assert isinstance(first_arg, np.ndarray), (
             f"First arg to diarize_model must be numpy array, got {type(first_arg)}"
-        assert first_arg is audio, \
-            "The exact numpy array passed to diarize() must be forwarded to the model"
+        )
+        assert first_arg is audio, "The exact numpy array passed to diarize() must be forwarded to the model"
 
     def test_no_file_path_in_diarize_call(self):
         """diarize() must never pass a file path string to the model."""
         pipeline = _import_pipeline()
         import inspect
+
         source = inspect.getsource(pipeline.diarize)
         # Check that no file-path-related logic exists
         for line in source.splitlines():
@@ -154,8 +160,9 @@ class TestDiarizeNumpyFed:
             if stripped.startswith("#") or stripped.startswith('"') or stripped.startswith("'"):
                 continue
             # The code should not reference temp paths, file paths, or path strings
-            assert "audio_path" not in stripped or "audio_path" in stripped and "not " in stripped, \
+            assert "audio_path" not in stripped or "audio_path" in stripped and "not " in stripped, (
                 f"diarize() should not use audio_path: {stripped}"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -194,9 +201,9 @@ class TestDiarizeGracefulSkip:
         with caplog.at_level(logging.WARNING):
             pipeline.diarize(audio, result)
 
-        assert any("HF_TOKEN" in record.message and "not set" in record.message.lower()
-                    for record in caplog.records), \
+        assert any("HF_TOKEN" in record.message and "not set" in record.message.lower() for record in caplog.records), (
             f"Expected HF_TOKEN warning; got: {[r.message for r in caplog.records]}"
+        )
 
     def test_failure_degrades_gracefully(self):
         """When diarization raises an exception, result is preserved without speakers."""
@@ -233,12 +240,15 @@ class TestDiarizeGracefulSkip:
         mock_diarize_model = MagicMock()
         mock_diarize_model.side_effect = RuntimeError("pyannote model error")
 
-        with patch.object(pipeline, "load_diarize_pipeline", return_value=mock_diarize_model), \
-             caplog.at_level(logging.WARNING):
+        with (
+            patch.object(pipeline, "load_diarize_pipeline", return_value=mock_diarize_model),
+            caplog.at_level(logging.WARNING),
+        ):
             pipeline.diarize(audio, result)
 
-        assert any("diarization failed" in record.message.lower() for record in caplog.records), \
+        assert any("diarization failed" in record.message.lower() for record in caplog.records), (
             f"Expected diarization failure warning; got: {[r.message for r in caplog.records]}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -261,12 +271,14 @@ class TestDiarizeSpeakerParams:
             speakers = ["SPEAKER_00", "SPEAKER_01"]
         segments = []
         for i, spk in enumerate(speakers):
-            segments.append({
-                "start": float(i),
-                "end": float(i + 1),
-                "text": f"Speaker {i}",
-                "speaker": spk,
-            })
+            segments.append(
+                {
+                    "start": float(i),
+                    "end": float(i + 1),
+                    "text": f"Speaker {i}",
+                    "speaker": spk,
+                }
+            )
         return {"segments": segments, "language": "en"}
 
     def test_num_speakers_passed(self):
@@ -278,13 +290,14 @@ class TestDiarizeSpeakerParams:
         mock_diarize_model = MagicMock()
         mock_diarize_model.return_value = MagicMock()
 
-        with patch.object(pipeline, "load_diarize_pipeline", return_value=mock_diarize_model), \
-             patch.object(pipeline.whispermlx, "assign_word_speakers", return_value=result):
+        with (
+            patch.object(pipeline, "load_diarize_pipeline", return_value=mock_diarize_model),
+            patch.object(pipeline.whispermlx, "assign_word_speakers", return_value=result),
+        ):
             pipeline.diarize(audio, result, num_speakers=2)
 
         call_kwargs = mock_diarize_model.call_args[1]
-        assert call_kwargs.get("num_speakers") == 2, \
-            f"num_speakers=2 not passed; got kwargs: {call_kwargs}"
+        assert call_kwargs.get("num_speakers") == 2, f"num_speakers=2 not passed; got kwargs: {call_kwargs}"
 
     def test_min_max_speakers_passed_when_no_num_speakers(self):
         """min_speakers and max_speakers are passed when num_speakers is not set."""
@@ -295,15 +308,16 @@ class TestDiarizeSpeakerParams:
         mock_diarize_model = MagicMock()
         mock_diarize_model.return_value = MagicMock()
 
-        with patch.object(pipeline, "load_diarize_pipeline", return_value=mock_diarize_model), \
-             patch.object(pipeline.whispermlx, "assign_word_speakers", return_value=result):
+        with (
+            patch.object(pipeline, "load_diarize_pipeline", return_value=mock_diarize_model),
+            patch.object(pipeline.whispermlx, "assign_word_speakers", return_value=result),
+        ):
             pipeline.diarize(audio, result, min_speakers=2, max_speakers=4)
 
         call_kwargs = mock_diarize_model.call_args[1]
         assert call_kwargs.get("min_speakers") == 2, f"min_speakers not passed: {call_kwargs}"
         assert call_kwargs.get("max_speakers") == 4, f"max_speakers not passed: {call_kwargs}"
-        assert "num_speakers" not in call_kwargs, \
-            f"num_speakers should not be passed when not provided: {call_kwargs}"
+        assert "num_speakers" not in call_kwargs, f"num_speakers should not be passed when not provided: {call_kwargs}"
 
     def test_num_speakers_overrides_min_max(self):
         """When num_speakers is provided, min/max_speakers are NOT passed."""
@@ -314,16 +328,20 @@ class TestDiarizeSpeakerParams:
         mock_diarize_model = MagicMock()
         mock_diarize_model.return_value = MagicMock()
 
-        with patch.object(pipeline, "load_diarize_pipeline", return_value=mock_diarize_model), \
-             patch.object(pipeline.whispermlx, "assign_word_speakers", return_value=result):
+        with (
+            patch.object(pipeline, "load_diarize_pipeline", return_value=mock_diarize_model),
+            patch.object(pipeline.whispermlx, "assign_word_speakers", return_value=result),
+        ):
             pipeline.diarize(audio, result, num_speakers=2, min_speakers=4, max_speakers=6)
 
         call_kwargs = mock_diarize_model.call_args[1]
         assert call_kwargs.get("num_speakers") == 2, f"num_speakers should be 2: {call_kwargs}"
-        assert "min_speakers" not in call_kwargs, \
+        assert "min_speakers" not in call_kwargs, (
             f"min_speakers should be omitted when num_speakers is set: {call_kwargs}"
-        assert "max_speakers" not in call_kwargs, \
+        )
+        assert "max_speakers" not in call_kwargs, (
             f"max_speakers should be omitted when num_speakers is set: {call_kwargs}"
+        )
 
     def test_no_speaker_params_when_none(self):
         """When no speaker count params are given, none are passed to the model."""
@@ -334,8 +352,10 @@ class TestDiarizeSpeakerParams:
         mock_diarize_model = MagicMock()
         mock_diarize_model.return_value = MagicMock()
 
-        with patch.object(pipeline, "load_diarize_pipeline", return_value=mock_diarize_model), \
-             patch.object(pipeline.whispermlx, "assign_word_speakers", return_value=result):
+        with (
+            patch.object(pipeline, "load_diarize_pipeline", return_value=mock_diarize_model),
+            patch.object(pipeline.whispermlx, "assign_word_speakers", return_value=result),
+        ):
             pipeline.diarize(audio, result)
 
         call_kwargs = mock_diarize_model.call_args[1]
@@ -368,17 +388,15 @@ class TestDiarizeEmbeddings:
         mock_segments = MagicMock()
         mock_diarize_model = MagicMock(return_value=(mock_segments, mock_embeddings))
 
-        with patch.object(pipeline, "load_diarize_pipeline", return_value=mock_diarize_model), \
-             patch.object(pipeline.whispermlx, "assign_word_speakers", return_value=result):
-            returned_result, returned_embeddings = pipeline.diarize(
-                audio, result, return_speaker_embeddings=True
-            )
+        with (
+            patch.object(pipeline, "load_diarize_pipeline", return_value=mock_diarize_model),
+            patch.object(pipeline.whispermlx, "assign_word_speakers", return_value=result),
+        ):
+            returned_result, returned_embeddings = pipeline.diarize(audio, result, return_speaker_embeddings=True)
 
         call_kwargs = mock_diarize_model.call_args[1]
-        assert call_kwargs.get("return_embeddings") is True, \
-            f"return_embeddings should be True: {call_kwargs}"
-        assert returned_embeddings == mock_embeddings, \
-            "Embeddings should be returned from the diarize function"
+        assert call_kwargs.get("return_embeddings") is True, f"return_embeddings should be True: {call_kwargs}"
+        assert returned_embeddings == mock_embeddings, "Embeddings should be returned from the diarize function"
 
     def test_return_embeddings_false_not_in_params(self):
         """return_speaker_embeddings=False does not add return_embeddings to params."""
@@ -389,17 +407,17 @@ class TestDiarizeEmbeddings:
         mock_segments = MagicMock()
         mock_diarize_model = MagicMock(return_value=mock_segments)
 
-        with patch.object(pipeline, "load_diarize_pipeline", return_value=mock_diarize_model), \
-             patch.object(pipeline.whispermlx, "assign_word_speakers", return_value=result):
-            returned_result, returned_embeddings = pipeline.diarize(
-                audio, result, return_speaker_embeddings=False
-            )
+        with (
+            patch.object(pipeline, "load_diarize_pipeline", return_value=mock_diarize_model),
+            patch.object(pipeline.whispermlx, "assign_word_speakers", return_value=result),
+        ):
+            returned_result, returned_embeddings = pipeline.diarize(audio, result, return_speaker_embeddings=False)
 
         call_kwargs = mock_diarize_model.call_args[1]
-        assert "return_embeddings" not in call_kwargs, \
+        assert "return_embeddings" not in call_kwargs, (
             f"return_embeddings should not be in kwargs when False: {call_kwargs}"
-        assert returned_embeddings is None, \
-            "Embeddings should be None when not requested"
+        )
+        assert returned_embeddings is None, "Embeddings should be None when not requested"
 
     def test_handles_tuple_output_when_embeddings_requested(self):
         """When return_embeddings=True, the output tuple is unpacked correctly."""
@@ -414,14 +432,13 @@ class TestDiarizeEmbeddings:
         }
         mock_diarize_model = MagicMock(return_value=(mock_segments, mock_embeddings))
 
-        with patch.object(pipeline, "load_diarize_pipeline", return_value=mock_diarize_model), \
-             patch.object(pipeline.whispermlx, "assign_word_speakers", return_value=result):
-            _, returned_embeddings = pipeline.diarize(
-                audio, result, return_speaker_embeddings=True
-            )
+        with (
+            patch.object(pipeline, "load_diarize_pipeline", return_value=mock_diarize_model),
+            patch.object(pipeline.whispermlx, "assign_word_speakers", return_value=result),
+        ):
+            _, returned_embeddings = pipeline.diarize(audio, result, return_speaker_embeddings=True)
 
-        assert returned_embeddings == mock_embeddings, \
-            "Should return the exact embeddings dict from the model"
+        assert returned_embeddings == mock_embeddings, "Should return the exact embeddings dict from the model"
 
     def test_handles_non_tuple_output_when_no_embeddings(self):
         """When return_embeddings=False, the output is used directly (not unpacked)."""
@@ -432,14 +449,13 @@ class TestDiarizeEmbeddings:
         mock_segments = MagicMock()
         mock_diarize_model = MagicMock(return_value=mock_segments)
 
-        with patch.object(pipeline, "load_diarize_pipeline", return_value=mock_diarize_model), \
-             patch.object(pipeline.whispermlx, "assign_word_speakers", return_value=result):
-            _, returned_embeddings = pipeline.diarize(
-                audio, result, return_speaker_embeddings=False
-            )
+        with (
+            patch.object(pipeline, "load_diarize_pipeline", return_value=mock_diarize_model),
+            patch.object(pipeline.whispermlx, "assign_word_speakers", return_value=result),
+        ):
+            _, returned_embeddings = pipeline.diarize(audio, result, return_speaker_embeddings=False)
 
-        assert returned_embeddings is None, \
-            "Embeddings should be None when not requested"
+        assert returned_embeddings is None, "Embeddings should be None when not requested"
 
 
 # ---------------------------------------------------------------------------
@@ -468,16 +484,22 @@ class TestExclusiveSpeakerDiarization:
 
         mock_diarize_model = MagicMock(return_value=mock_output)
 
-        assign_result = {"segments": [{"start": 0.0, "end": 1.0, "text": "hello", "speaker": "SPEAKER_00"}], "language": "en"}
+        assign_result = {
+            "segments": [{"start": 0.0, "end": 1.0, "text": "hello", "speaker": "SPEAKER_00"}],
+            "language": "en",
+        }
 
-        with patch.object(pipeline, "load_diarize_pipeline", return_value=mock_diarize_model), \
-             patch.object(pipeline.whispermlx, "assign_word_speakers", return_value=assign_result) as mock_assign:
+        with (
+            patch.object(pipeline, "load_diarize_pipeline", return_value=mock_diarize_model),
+            patch.object(pipeline.whispermlx, "assign_word_speakers", return_value=assign_result) as mock_assign,
+        ):
             pipeline.diarize(audio, result)
 
         # assign_word_speakers should be called with the exclusive version
         mock_assign.assert_called_once()
-        assert mock_assign.call_args[0][0] is exclusive, \
+        assert mock_assign.call_args[0][0] is exclusive, (
             "assign_word_speakers should receive exclusive_speaker_diarization"
+        )
 
     def test_no_exclusive_attribute_passes_raw_output(self):
         """When diarize output lacks exclusive_speaker_diarization, raw output is passed."""
@@ -488,16 +510,20 @@ class TestExclusiveSpeakerDiarization:
         mock_output = MagicMock(spec=[])  # No attributes
         mock_diarize_model = MagicMock(return_value=mock_output)
 
-        assign_result = {"segments": [{"start": 0.0, "end": 1.0, "text": "hello", "speaker": "SPEAKER_00"}], "language": "en"}
+        assign_result = {
+            "segments": [{"start": 0.0, "end": 1.0, "text": "hello", "speaker": "SPEAKER_00"}],
+            "language": "en",
+        }
 
-        with patch.object(pipeline, "load_diarize_pipeline", return_value=mock_diarize_model), \
-             patch.object(pipeline.whispermlx, "assign_word_speakers", return_value=assign_result) as mock_assign:
+        with (
+            patch.object(pipeline, "load_diarize_pipeline", return_value=mock_diarize_model),
+            patch.object(pipeline.whispermlx, "assign_word_speakers", return_value=assign_result) as mock_assign,
+        ):
             pipeline.diarize(audio, result)
 
         # assign_word_speakers should be called with the raw output
         mock_assign.assert_called_once()
-        assert mock_assign.call_args[0][0] is mock_output, \
-            "assign_word_speakers should receive the raw diarize output"
+        assert mock_assign.call_args[0][0] is mock_output, "assign_word_speakers should receive the raw diarize output"
 
 
 # ---------------------------------------------------------------------------
@@ -525,8 +551,10 @@ class TestAssignWordSpeakers:
         mock_diarize_segments = MagicMock(spec=[])
         mock_diarize_model = MagicMock(return_value=mock_diarize_segments)
 
-        with patch.object(pipeline, "load_diarize_pipeline", return_value=mock_diarize_model), \
-             patch.object(pipeline.whispermlx, "assign_word_speakers", return_value=result) as mock_assign:
+        with (
+            patch.object(pipeline, "load_diarize_pipeline", return_value=mock_diarize_model),
+            patch.object(pipeline.whispermlx, "assign_word_speakers", return_value=result) as mock_assign,
+        ):
             pipeline.diarize(audio, result)
 
         mock_assign.assert_called_once_with(mock_diarize_segments, result)
@@ -545,12 +573,13 @@ class TestAssignWordSpeakers:
             "language": "en",
         }
 
-        with patch.object(pipeline, "load_diarize_pipeline", return_value=mock_diarize_model), \
-             patch.object(pipeline.whispermlx, "assign_word_speakers", return_value=diarized_result):
+        with (
+            patch.object(pipeline, "load_diarize_pipeline", return_value=mock_diarize_model),
+            patch.object(pipeline.whispermlx, "assign_word_speakers", return_value=diarized_result),
+        ):
             returned_result, _ = pipeline.diarize(audio, result)
 
-        assert returned_result == diarized_result, \
-            "Diarized result from assign_word_speakers should be returned"
+        assert returned_result == diarized_result, "Diarized result from assign_word_speakers should be returned"
 
 
 # ---------------------------------------------------------------------------
@@ -565,29 +594,31 @@ class TestDiarizeNamespace:
         """DiarizationPipeline must be imported from whispermlx.diarize."""
         pipeline = _import_pipeline()
         import inspect
+
         source = inspect.getsource(pipeline)
-        assert "from whispermlx.diarize import DiarizationPipeline" in source, \
+        assert "from whispermlx.diarize import DiarizationPipeline" in source, (
             "Must import DiarizationPipeline from whispermlx.diarize"
+        )
 
     def test_no_whisperx_diarize_import(self):
         """Must not import from whisperx.diarize."""
         pipeline = _import_pipeline()
         import inspect
+
         source = inspect.getsource(pipeline)
         for line in source.splitlines():
             stripped = line.strip()
             if stripped.startswith("#"):
                 continue
-            assert "from whisperx" not in stripped, \
-                f"Found whisperx import in pipeline.py: {stripped}"
+            assert "from whisperx" not in stripped, f"Found whisperx import in pipeline.py: {stripped}"
 
     def test_assign_word_speakers_from_whispermlx(self):
         """assign_word_speakers must be called via whispermlx, not whisperx."""
         pipeline = _import_pipeline()
         import inspect
+
         source = inspect.getsource(pipeline.diarize)
-        assert "whispermlx.assign_word_speakers" in source, \
-            "assign_word_speakers must use whispermlx namespace"
+        assert "whispermlx.assign_word_speakers" in source, "assign_word_speakers must use whispermlx namespace"
 
 
 # ---------------------------------------------------------------------------
@@ -624,13 +655,18 @@ class TestRunPipelineDiarization:
             "language": "en",
         }
 
-        with patch.object(pipeline.whispermlx, "align", return_value={
-            "segments": [{"start": 0.0, "end": 1.0, "text": "hello", "words": []}],
-            "word_segments": [],
-        }), patch.object(pipeline, "diarize", return_value=(diarized_result, None)) as mock_diarize:
-            result, embeddings = pipeline.run_pipeline(
-                audio, model_name="base", should_diarize=True
-            )
+        with (
+            patch.object(
+                pipeline.whispermlx,
+                "align",
+                return_value={
+                    "segments": [{"start": 0.0, "end": 1.0, "text": "hello", "words": []}],
+                    "word_segments": [],
+                },
+            ),
+            patch.object(pipeline, "diarize", return_value=(diarized_result, None)) as mock_diarize,
+        ):
+            result, embeddings = pipeline.run_pipeline(audio, model_name="base", should_diarize=True)
 
         mock_diarize.assert_called_once()
         assert result["segments"][0].get("speaker") == "SPEAKER_00"
@@ -647,13 +683,18 @@ class TestRunPipelineDiarization:
         mock_metadata = {"language": "en", "dictionary": {}, "type": "huggingface"}
         pipeline._align_models["en"] = (mock_align_model, mock_metadata)
 
-        with patch.object(pipeline.whispermlx, "align", return_value={
-            "segments": [{"start": 0.0, "end": 1.0, "text": "hello", "words": []}],
-            "word_segments": [],
-        }), patch.object(pipeline, "diarize") as mock_diarize:
-            result, embeddings = pipeline.run_pipeline(
-                audio, model_name="base", should_diarize=False
-            )
+        with (
+            patch.object(
+                pipeline.whispermlx,
+                "align",
+                return_value={
+                    "segments": [{"start": 0.0, "end": 1.0, "text": "hello", "words": []}],
+                    "word_segments": [],
+                },
+            ),
+            patch.object(pipeline, "diarize") as mock_diarize,
+        ):
+            result, embeddings = pipeline.run_pipeline(audio, model_name="base", should_diarize=False)
 
         mock_diarize.assert_not_called()
         assert embeddings is None
@@ -670,10 +711,17 @@ class TestRunPipelineDiarization:
         mock_metadata = {"language": "en", "dictionary": {}, "type": "huggingface"}
         pipeline._align_models["en"] = (mock_align_model, mock_metadata)
 
-        with patch.object(pipeline.whispermlx, "align", return_value={
-            "segments": [{"start": 0.0, "end": 1.0, "text": "hello", "words": []}],
-            "word_segments": [],
-        }), patch.object(pipeline, "diarize", return_value=({"segments": [], "language": "en"}, None)) as mock_diarize:
+        with (
+            patch.object(
+                pipeline.whispermlx,
+                "align",
+                return_value={
+                    "segments": [{"start": 0.0, "end": 1.0, "text": "hello", "words": []}],
+                    "word_segments": [],
+                },
+            ),
+            patch.object(pipeline, "diarize", return_value=({"segments": [], "language": "en"}, None)) as mock_diarize,
+        ):
             pipeline.run_pipeline(
                 audio,
                 model_name="base",
@@ -701,25 +749,26 @@ class TestRunPipelineDiarization:
         call_order = []
 
         original_align = pipeline.align
+
         def track_align(*args, **kwargs):
             call_order.append("align")
             return original_align(*args, **kwargs)
 
         original_diarize = pipeline.diarize
+
         def track_diarize(*args, **kwargs):
             call_order.append("diarize")
             return original_diarize(*args, **kwargs)
 
-        with patch.object(pipeline, "align", side_effect=track_align), \
-             patch.object(pipeline, "diarize", side_effect=track_diarize) as mock_diarize:
+        with (
+            patch.object(pipeline, "align", side_effect=track_align),
+            patch.object(pipeline, "diarize", side_effect=track_diarize) as mock_diarize,
+        ):
             mock_diarize.return_value = ({"segments": [], "language": "en"}, None)
-            pipeline.run_pipeline(
-                audio, model_name="base", should_diarize=True, word_timestamps=True
-            )
+            pipeline.run_pipeline(audio, model_name="base", should_diarize=True, word_timestamps=True)
 
         # Align must come before diarize
-        assert call_order == ["align", "diarize"], \
-            f"Expected align before diarize; got: {call_order}"
+        assert call_order == ["align", "diarize"], f"Expected align before diarize; got: {call_order}"
 
     def test_diarization_runs_even_when_word_timestamps_false(self):
         """Diarization still runs when word_timestamps=false (alignment skipped)."""
@@ -729,11 +778,20 @@ class TestRunPipelineDiarization:
         mock_model = _make_mock_model()
         pipeline._whisper_models["base"] = mock_model
 
-        with patch.object(pipeline, "align") as mock_align, \
-             patch.object(pipeline, "diarize", return_value=({
-                 "segments": [{"start": 0.0, "end": 1.0, "text": "hello", "speaker": "SPEAKER_00"}],
-                 "language": "en",
-             }, None)) as mock_diarize:
+        with (
+            patch.object(pipeline, "align") as mock_align,
+            patch.object(
+                pipeline,
+                "diarize",
+                return_value=(
+                    {
+                        "segments": [{"start": 0.0, "end": 1.0, "text": "hello", "speaker": "SPEAKER_00"}],
+                        "language": "en",
+                    },
+                    None,
+                ),
+            ) as mock_diarize,
+        ):
             result, embeddings = pipeline.run_pipeline(
                 audio, model_name="base", should_diarize=True, word_timestamps=False
             )
@@ -761,9 +819,11 @@ class TestDiarizationPipelineImport:
         """The entire pipeline.py must not contain use_auth_token."""
         pipeline = _import_pipeline()
         import inspect
+
         source = inspect.getsource(pipeline)
-        assert "use_auth_token" not in source, \
+        assert "use_auth_token" not in source, (
             "use_auth_token must not appear anywhere in pipeline.py (use token= instead)"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -785,9 +845,11 @@ class TestDiarizeClearGpuMemory:
 
         mock_diarize_model = MagicMock(return_value=MagicMock())
 
-        with patch.object(pipeline, "load_diarize_pipeline", return_value=mock_diarize_model), \
-             patch.object(pipeline.whispermlx, "assign_word_speakers", return_value=result), \
-             patch.object(pipeline, "clear_gpu_memory") as mock_clear:
+        with (
+            patch.object(pipeline, "load_diarize_pipeline", return_value=mock_diarize_model),
+            patch.object(pipeline.whispermlx, "assign_word_speakers", return_value=result),
+            patch.object(pipeline, "clear_gpu_memory") as mock_clear,
+        ):
             pipeline.diarize(audio, result)
             mock_clear.assert_called_once()
 

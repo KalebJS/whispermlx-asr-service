@@ -8,6 +8,7 @@ import os
 import tempfile
 import time
 import warnings
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import whispermlx
@@ -43,17 +44,50 @@ logger = logging.getLogger(__name__)
 
 MAX_FILE_SIZE_MB = int(os.getenv("MAX_FILE_SIZE_MB", "1000"))
 SERVE_MODE = "simple"  # Ray Serve removed; always simple mode
+VALID_OUTPUT_FORMATS = {"json", "text", "srt", "vtt", "tsv"}
+
+logger.info(f"Whispermlx ASR Service v{__version__} initialized on device: {DEVICE}")
+logger.info(f"Compute type: {COMPUTE_TYPE} (inert under MLX), Batch size: {BATCH_SIZE} (inert under MLX)")
+logger.info(f"Default model: {DEFAULT_MODEL}, Serve mode: {SERVE_MODE}")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan: preload models on startup (modern API).
+
+    Uses the FastAPI lifespan context-manager instead of the deprecated
+    startup event handler. PRELOAD_MODEL still warms the model at startup.
+    """
+    prom_metrics.SERVICE_INFO.info(
+        {
+            "version": __version__,
+            "device": DEVICE,
+            "compute_type": COMPUTE_TYPE,
+            "serve_mode": SERVE_MODE,
+        }
+    )
+    preload_model = os.getenv("PRELOAD_MODEL", None)
+    if preload_model:
+        logger.info(f"Preloading model on startup: {preload_model}")
+        try:
+            load_whisper_model(preload_model)
+            logger.info(f"Successfully preloaded model: {preload_model}")
+        except Exception as e:
+            logger.error(f"Failed to preload model {preload_model}: {str(e)}")
+    # Reflect preloaded model(s) in the loaded-models gauge so that
+    # /metrics shows whisperx_loaded_models >= 1 before any request
+    # (VAL-CROSS-016).
+    prom_metrics.LOADED_MODELS.set(len(loaded_models))
+    yield
+
 
 # Initialize FastAPI app
 app = FastAPI(
     title="WhisperX ASR API",
     description="Automatic Speech Recognition API with Speaker Diarization using WhisperX",
     version=__version__,
+    lifespan=lifespan,
 )
-
-logger.info(f"Whispermlx ASR Service v{__version__} initialized on device: {DEVICE}")
-logger.info(f"Compute type: {COMPUTE_TYPE} (inert under MLX), Batch size: {BATCH_SIZE} (inert under MLX)")
-logger.info(f"Default model: {DEFAULT_MODEL}, Serve mode: {SERVE_MODE}")
 
 
 @app.exception_handler(RequestValidationError)
@@ -94,31 +128,6 @@ async def openai_validation_error_handler(request: Request, exc: RequestValidati
         )
     # Non-/v1/ paths: return the default FastAPI 422 detail shape
     return JSONResponse(status_code=422, content={"detail": exc.errors()})
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Preload models on startup"""
-    prom_metrics.SERVICE_INFO.info(
-        {
-            "version": __version__,
-            "device": DEVICE,
-            "compute_type": COMPUTE_TYPE,
-            "serve_mode": SERVE_MODE,
-        }
-    )
-    preload_model = os.getenv("PRELOAD_MODEL", None)
-    if preload_model:
-        logger.info(f"Preloading model on startup: {preload_model}")
-        try:
-            load_whisper_model(preload_model)
-            logger.info(f"Successfully preloaded model: {preload_model}")
-        except Exception as e:
-            logger.error(f"Failed to preload model {preload_model}: {str(e)}")
-    # Reflect preloaded model(s) in the loaded-models gauge so that
-    # /metrics shows whisperx_loaded_models >= 1 before any request
-    # (VAL-CROSS-016).
-    prom_metrics.LOADED_MODELS.set(len(loaded_models))
 
 
 @app.get("/")
@@ -178,6 +187,14 @@ async def transcribe_audio(
         # Handle legacy parameter names
         if output is not None:
             output_format = output
+
+        # Validate output_format early so invalid formats are rejected
+        # before any pipeline execution (avoids wasted compute).
+        if output_format not in VALID_OUTPUT_FORMATS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported output format: {output_format}",
+            )
 
         # Map OpenAI-style aliases (whisper-tiny, whisper-large-v3, whisper-1, ...)
         # to canonical MLX model names so /asr accepts the same identifiers
@@ -315,9 +332,6 @@ async def transcribe_audio(
 
             metric_status = "ok"
             return {"tsv": "\n".join(tsv_content)}
-
-        else:
-            raise HTTPException(status_code=400, detail=f"Unsupported output format: {output_format}")
 
     except HTTPException as e:
         metric_status = f"http_{e.status_code}"

@@ -6,14 +6,11 @@ VAL-ASR-010, VAL-ASR-011, VAL-ASR-027, VAL-ASR-028, VAL-ASR-029,
 VAL-ASR-033, VAL-OPS-013, VAL-OPS-014.
 """
 
-import io
-import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -64,16 +61,28 @@ def _mock_pipeline_result(segments=None, language="en", word_segments=None):
 @pytest.fixture()
 def client():
     """Create a TestClient with run_pipeline fully mocked to return controlled results."""
-    with patch("app.main.run_in_queue") as mock_queue, patch(
-        "app.main.whispermlx"
-    ) as mock_wmlx, patch("app.main.resolve_model_name") as mock_resolve, patch(
-        "app.main.get_canonical_models"
-    ) as mock_canonical:
+    with (
+        patch("app.main.run_in_queue") as mock_queue,
+        patch("app.main.whispermlx") as mock_wmlx,
+        patch("app.main.resolve_model_name") as mock_resolve,
+        patch("app.main.get_canonical_models") as mock_canonical,
+    ):
         mock_resolve.side_effect = lambda m: m if m else "large-v3"
         mock_canonical.return_value = [
-            "tiny", "tiny.en", "base", "base.en", "small", "small.en",
-            "medium", "medium.en", "large", "large-v1", "large-v2",
-            "large-v3", "large-v3-turbo", "turbo",
+            "tiny",
+            "tiny.en",
+            "base",
+            "base.en",
+            "small",
+            "small.en",
+            "medium",
+            "medium.en",
+            "large",
+            "large-v1",
+            "large-v2",
+            "large-v3",
+            "large-v3-turbo",
+            "turbo",
         ]
         mock_wmlx.load_audio.return_value = np.zeros(16000, dtype=np.float32)
 
@@ -232,8 +241,7 @@ class TestOutputFormatSrt:
         for cue in cues:
             cue_lines = cue.strip().split("\n")
             assert len(cue_lines) >= 2, f"SRT cue too short: {cue}"
-            assert ts_pattern.match(cue_lines[1]), \
-                f"SRT timestamp line malformed: {cue_lines[1]}"
+            assert ts_pattern.match(cue_lines[1]), f"SRT timestamp line malformed: {cue_lines[1]}"
 
     def test_srt_has_text_lines(self, client):
         c, mock_queue = client
@@ -281,8 +289,7 @@ class TestOutputFormatSrt:
                 for part in parts:
                     # After the last colon, the separator before ms must be a comma
                     time_part = part.strip()
-                    assert re.match(r"\d{2}:\d{2}:\d{2},\d{3}", time_part), \
-                        f"Bad SRT timestamp format: {time_part}"
+                    assert re.match(r"\d{2}:\d{2}:\d{2},\d{3}", time_part), f"Bad SRT timestamp format: {time_part}"
 
     def test_srt_includes_speaker_labels(self, client):
         """When segments have speaker labels, SRT cues prefix text with [SPEAKER_NN]."""
@@ -362,8 +369,7 @@ class TestOutputFormatVtt:
                 parts = line.split(" --> ")
                 for part in parts:
                     time_part = part.strip()
-                    assert re.match(r"\d{2}:\d{2}:\d{2}\.\d{3}", time_part), \
-                        f"Bad VTT timestamp format: {time_part}"
+                    assert re.match(r"\d{2}:\d{2}:\d{2}\.\d{3}", time_part), f"Bad VTT timestamp format: {time_part}"
                 # Must NOT contain commas in timecodes
                 assert "," not in line, f"VTT should use period, not comma: {line}"
 
@@ -404,8 +410,8 @@ class TestOutputFormatVtt:
         resp = _post_asr(c, params={"output_format": "vtt"})
         assert resp.status_code == 200
         vtt = resp.json()["vtt"]
-        assert "[SPEAKER_00]" in vtt, f"Expected speaker label in VTT output"
-        assert "[SPEAKER_01]" in vtt, f"Expected speaker label in VTT output"
+        assert "[SPEAKER_00]" in vtt, "Expected speaker label in VTT output"
+        assert "[SPEAKER_01]" in vtt, "Expected speaker label in VTT output"
 
 
 # ===================================================================
@@ -444,8 +450,7 @@ class TestOutputFormatTsv:
         assert resp.status_code == 200
         tsv = resp.json()["tsv"]
         lines = tsv.rstrip("\n").split("\n")
-        assert lines[0] == "start\tend\ttext\tspeaker", \
-            f"TSV header wrong: {lines[0]}"
+        assert lines[0] == "start\tend\ttext\tspeaker", f"TSV header wrong: {lines[0]}"
 
     def test_tsv_has_data_rows(self, client):
         c, mock_queue = client
@@ -480,8 +485,7 @@ class TestOutputFormatTsv:
         # Skip header
         for line in lines[1:]:
             columns = line.split("\t")
-            assert len(columns) == 4, \
-                f"TSV row should have 4 columns, got {len(columns)}: {line}"
+            assert len(columns) == 4, f"TSV row should have 4 columns, got {len(columns)}: {line}"
 
     def test_tsv_start_end_are_numeric(self, client):
         c, mock_queue = client
@@ -500,8 +504,7 @@ class TestOutputFormatTsv:
             columns = line.split("\t")
             start_val = float(columns[0])
             end_val = float(columns[1])
-            assert end_val >= start_val, \
-                f"TSV end ({end_val}) < start ({start_val})"
+            assert end_val >= start_val, f"TSV end ({end_val}) < start ({start_val})"
 
     def test_tsv_includes_speaker_column(self, client):
         """When segments have speaker labels, TSV speaker column is populated."""
@@ -520,7 +523,7 @@ class TestOutputFormatTsv:
         tsv = resp.json()["tsv"]
         lines = tsv.rstrip("\n").split("\n")
         # Data rows should have speaker values
-        data_with_speakers = [l for l in lines[1:] if l.split("\t")[3] != ""]
+        data_with_speakers = [line for line in lines[1:] if line.split("\t")[3] != ""]
         assert len(data_with_speakers) >= 1, f"Expected speaker labels in TSV: {tsv}"
 
 
@@ -556,8 +559,7 @@ class TestInvalidOutputFormat:
         resp = _post_asr(c, params={"output_format": "docx"})
         body = resp.json()
         assert "detail" in body, f"Missing 'detail' in error: {body}"
-        assert "docx" in body["detail"], \
-            f"Error detail should mention the bad format: {body['detail']}"
+        assert "docx" in body["detail"], f"Error detail should mention the bad format: {body['detail']}"
 
     def test_various_invalid_formats(self, client):
         """Multiple invalid formats all return 400."""
@@ -571,8 +573,27 @@ class TestInvalidOutputFormat:
 
         for fmt in ["pdf", "mp3", "wav", "csv", "xml", "html", "FORMAT"]:
             resp = _post_asr(c, params={"output_format": fmt})
-            assert resp.status_code == 400, \
-                f"output_format={fmt} should return 400, got {resp.status_code}"
+            assert resp.status_code == 400, f"output_format={fmt} should return 400, got {resp.status_code}"
+
+    def test_invalid_format_rejected_before_pipeline(self, client):
+        """Invalid output_format is rejected before the pipeline runs (no wasted compute).
+
+        The queue/pipeline should never be called when the output_format is invalid.
+        """
+        c, mock_queue = client
+
+        resp = _post_asr(c, params={"output_format": "docx"})
+        assert resp.status_code == 400
+        # The pipeline queue must NOT have been called
+        mock_queue.assert_not_called()
+
+    def test_invalid_format_via_legacy_output_alias_rejected_before_pipeline(self, client):
+        """Legacy `output` alias with an invalid value is also rejected before pipeline."""
+        c, mock_queue = client
+
+        resp = _post_asr(c, params={"output": "docx"})
+        assert resp.status_code == 400
+        mock_queue.assert_not_called()
 
 
 # ===================================================================
@@ -617,8 +638,7 @@ class TestJsonTextIsArray:
         resp = _post_asr(c)
         assert resp.status_code == 200
         body = resp.json()
-        assert isinstance(body["text"], list), \
-            f"text should be an array, got {type(body['text'])}: {body['text']}"
+        assert isinstance(body["text"], list), f"text should be an array, got {type(body['text'])}: {body['text']}"
 
     def test_json_text_mirrors_segments(self, client):
         c, mock_queue = client
@@ -635,16 +655,14 @@ class TestJsonTextIsArray:
         text = body["text"]
         segments = body["segments"]
         # text array must be the same length as segments
-        assert len(text) == len(segments), \
-            f"text length ({len(text)}) != segments length ({len(segments)})"
+        assert len(text) == len(segments), f"text length ({len(text)}) != segments length ({len(segments)})"
         # Each entry in text must match the corresponding segment
-        for i, (t, s) in enumerate(zip(text, segments)):
-            assert t["text"] == s["text"], \
-                f"text[{i}].text ({t.get('text')}) != segments[{i}].text ({s.get('text')})"
-            assert t["start"] == s["start"], \
+        for i, (t, s) in enumerate(zip(text, segments, strict=False)):
+            assert t["text"] == s["text"], f"text[{i}].text ({t.get('text')}) != segments[{i}].text ({s.get('text')})"
+            assert t["start"] == s["start"], (
                 f"text[{i}].start ({t.get('start')}) != segments[{i}].start ({s.get('start')})"
-            assert t["end"] == s["end"], \
-                f"text[{i}].end ({t.get('end')}) != segments[{i}].end ({s.get('end')})"
+            )
+            assert t["end"] == s["end"], f"text[{i}].end ({t.get('end')}) != segments[{i}].end ({s.get('end')})"
 
     def test_json_text_is_not_string(self, client):
         """Explicitly verify text is NOT a string (the common mistake)."""
@@ -659,8 +677,9 @@ class TestJsonTextIsArray:
         resp = _post_asr(c)
         assert resp.status_code == 200
         body = resp.json()
-        assert not isinstance(body["text"], str), \
+        assert not isinstance(body["text"], str), (
             f"text must NOT be a string for output_format=json; got: {body['text']}"
+        )
 
 
 # ===================================================================
@@ -683,8 +702,8 @@ class TestLegacyOutputAlias:
         resp = _post_asr(c, params={"output": "text"})
         assert resp.status_code == 200
         body = resp.json()
-        assert "text" in body, f"Legacy output=text should return text key"
-        assert isinstance(body["text"], str), f"text format should return a string"
+        assert "text" in body, "Legacy output=text should return text key"
+        assert isinstance(body["text"], str), "text format should return a string"
 
     def test_output_srt_alias(self, client):
         c, mock_queue = client
@@ -698,7 +717,7 @@ class TestLegacyOutputAlias:
         resp = _post_asr(c, params={"output": "srt"})
         assert resp.status_code == 200
         body = resp.json()
-        assert "srt" in body, f"Legacy output=srt should return srt key"
+        assert "srt" in body, "Legacy output=srt should return srt key"
 
     def test_output_vtt_alias(self, client):
         c, mock_queue = client
@@ -712,7 +731,7 @@ class TestLegacyOutputAlias:
         resp = _post_asr(c, params={"output": "vtt"})
         assert resp.status_code == 200
         body = resp.json()
-        assert "vtt" in body, f"Legacy output=vtt should return vtt key"
+        assert "vtt" in body, "Legacy output=vtt should return vtt key"
         assert body["vtt"].startswith("WEBVTT"), "VTT should start with WEBVTT"
 
     def test_output_tsv_alias(self, client):
@@ -727,7 +746,7 @@ class TestLegacyOutputAlias:
         resp = _post_asr(c, params={"output": "tsv"})
         assert resp.status_code == 200
         body = resp.json()
-        assert "tsv" in body, f"Legacy output=tsv should return tsv key"
+        assert "tsv" in body, "Legacy output=tsv should return tsv key"
 
     def test_output_overrides_output_format(self, client):
         """When both output and output_format are given, output takes precedence."""
@@ -792,8 +811,9 @@ class TestSegmentsTimeOrdered:
         body = resp.json()
         segments = body["segments"]
         for i in range(len(segments) - 1):
-            assert segments[i]["start"] <= segments[i + 1]["start"], \
-                f"Segment {i} start ({segments[i]['start']}) > segment {i+1} start ({segments[i+1]['start']})"
+            assert segments[i]["start"] <= segments[i + 1]["start"], (
+                f"Segment {i} start ({segments[i]['start']}) > segment {i + 1} start ({segments[i + 1]['start']})"
+            )
 
     def test_each_segment_end_gte_start(self, client):
         c, mock_queue = client
@@ -814,8 +834,7 @@ class TestSegmentsTimeOrdered:
         assert resp.status_code == 200
         body = resp.json()
         for seg in body["segments"]:
-            assert seg["end"] >= seg["start"], \
-                f"Segment end ({seg['end']}) < start ({seg['start']})"
+            assert seg["end"] >= seg["start"], f"Segment end ({seg['end']}) < start ({seg['start']})"
 
 
 # ===================================================================
@@ -838,10 +857,11 @@ class TestNonJsonFormatsWrapped:
 
         resp = _post_asr(c, params={"output_format": "text"})
         assert resp.status_code == 200
-        assert "application/json" in resp.headers.get("content-type", ""), \
+        assert "application/json" in resp.headers.get("content-type", ""), (
             f"text format should be application/json, got: {resp.headers.get('content-type')}"
+        )
         body = resp.json()
-        assert "text" in body, f"JSON-wrapped text format should have 'text' key"
+        assert "text" in body, "JSON-wrapped text format should have 'text' key"
 
     def test_srt_format_is_json_wrapped(self, client):
         c, mock_queue = client
@@ -854,10 +874,11 @@ class TestNonJsonFormatsWrapped:
 
         resp = _post_asr(c, params={"output_format": "srt"})
         assert resp.status_code == 200
-        assert "application/json" in resp.headers.get("content-type", ""), \
+        assert "application/json" in resp.headers.get("content-type", ""), (
             f"srt format should be application/json, got: {resp.headers.get('content-type')}"
+        )
         body = resp.json()
-        assert "srt" in body, f"JSON-wrapped srt format should have 'srt' key"
+        assert "srt" in body, "JSON-wrapped srt format should have 'srt' key"
 
     def test_vtt_format_is_json_wrapped(self, client):
         c, mock_queue = client
@@ -870,10 +891,11 @@ class TestNonJsonFormatsWrapped:
 
         resp = _post_asr(c, params={"output_format": "vtt"})
         assert resp.status_code == 200
-        assert "application/json" in resp.headers.get("content-type", ""), \
+        assert "application/json" in resp.headers.get("content-type", ""), (
             f"vtt format should be application/json, got: {resp.headers.get('content-type')}"
+        )
         body = resp.json()
-        assert "vtt" in body, f"JSON-wrapped vtt format should have 'vtt' key"
+        assert "vtt" in body, "JSON-wrapped vtt format should have 'vtt' key"
 
     def test_tsv_format_is_json_wrapped(self, client):
         c, mock_queue = client
@@ -886,10 +908,11 @@ class TestNonJsonFormatsWrapped:
 
         resp = _post_asr(c, params={"output_format": "tsv"})
         assert resp.status_code == 200
-        assert "application/json" in resp.headers.get("content-type", ""), \
+        assert "application/json" in resp.headers.get("content-type", ""), (
             f"tsv format should be application/json, got: {resp.headers.get('content-type')}"
+        )
         body = resp.json()
-        assert "tsv" in body, f"JSON-wrapped tsv format should have 'tsv' key"
+        assert "tsv" in body, "JSON-wrapped tsv format should have 'tsv' key"
 
     def test_json_format_is_also_application_json(self, client):
         """Default json format must also return application/json."""
@@ -903,8 +926,9 @@ class TestNonJsonFormatsWrapped:
 
         resp = _post_asr(c)
         assert resp.status_code == 200
-        assert "application/json" in resp.headers.get("content-type", ""), \
+        assert "application/json" in resp.headers.get("content-type", ""), (
             f"json format should be application/json, got: {resp.headers.get('content-type')}"
+        )
 
 
 # ===================================================================
@@ -949,8 +973,9 @@ class TestOversizedUpload:
         assert resp.status_code == 413
         body = resp.json()
         assert "detail" in body
-        assert "too large" in body["detail"].lower() or "max" in body["detail"].lower(), \
+        assert "too large" in body["detail"].lower() or "max" in body["detail"].lower(), (
             f"413 detail should mention size: {body['detail']}"
+        )
 
 
 # ===================================================================

@@ -1,6 +1,7 @@
 """
 OpenAI-compatible Pydantic models for Whisper API
 """
+
 from enum import StrEnum
 from typing import Literal
 
@@ -9,6 +10,7 @@ from pydantic import BaseModel, Field
 
 class ResponseFormat(StrEnum):
     """Supported response formats for transcription"""
+
     JSON = "json"
     TEXT = "text"
     SRT = "srt"
@@ -18,14 +20,17 @@ class ResponseFormat(StrEnum):
 
 class TimestampGranularity(StrEnum):
     """Timestamp granularity options"""
+
     WORD = "word"
     SEGMENT = "segment"
 
 
 # --- Response Models ---
 
+
 class TranscriptionWord(BaseModel):
     """Word-level timestamp object for verbose_json"""
+
     word: str
     start: float
     end: float
@@ -33,6 +38,7 @@ class TranscriptionWord(BaseModel):
 
 class TranscriptionSegment(BaseModel):
     """Segment-level object for verbose_json"""
+
     id: int
     seek: int
     start: float
@@ -47,11 +53,13 @@ class TranscriptionSegment(BaseModel):
 
 class TranscriptionJsonResponse(BaseModel):
     """Simple JSON response format"""
+
     text: str
 
 
 class TranscriptionVerboseJsonResponse(BaseModel):
     """Verbose JSON response with segments and optional words"""
+
     task: Literal["transcribe", "translate"]
     language: str
     duration: float
@@ -62,8 +70,10 @@ class TranscriptionVerboseJsonResponse(BaseModel):
 
 # --- Error Models (OpenAI-compatible) ---
 
+
 class OpenAIErrorDetail(BaseModel):
     """Error detail matching OpenAI format"""
+
     message: str
     type: str = "invalid_request_error"
     param: str | None = None
@@ -72,4 +82,5 @@ class OpenAIErrorDetail(BaseModel):
 
 class OpenAIErrorResponse(BaseModel):
     """Error response matching OpenAI format"""
+
     error: OpenAIErrorDetail

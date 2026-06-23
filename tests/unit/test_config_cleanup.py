@@ -166,9 +166,7 @@ class TestComputeTypeBatchSizeInert:
             mock_load.assert_called_once()
             # Verify compute_type is NOT in the call
             call_kwargs = mock_load.call_args.kwargs
-            assert "compute_type" not in call_kwargs, (
-                f"compute_type was passed to load_model: {call_kwargs}"
-            )
+            assert "compute_type" not in call_kwargs, f"compute_type was passed to load_model: {call_kwargs}"
 
     def test_batch_size_not_passed_to_transcribe(self):
         """whisper_model.transcribe() must not receive batch_size."""
@@ -180,14 +178,10 @@ class TestComputeTypeBatchSizeInert:
             "language": "en",
         }
         with patch.object(pipeline_mod, "load_whisper_model", return_value=mock_model):
-            pipeline_mod.transcribe(
-                audio=MagicMock(), model_name="tiny", language="en", task="transcribe"
-            )
+            pipeline_mod.transcribe(audio=MagicMock(), model_name="tiny", language="en", task="transcribe")
             mock_model.transcribe.assert_called_once()
             call_kwargs = mock_model.transcribe.call_args.kwargs
-            assert "batch_size" not in call_kwargs, (
-                f"batch_size was passed to transcribe: {call_kwargs}"
-            )
+            assert "batch_size" not in call_kwargs, f"batch_size was passed to transcribe: {call_kwargs}"
 
     def test_default_cache_dir_is_native_path(self):
         """The default CACHE_DIR must be a native user path, not the Docker
@@ -201,7 +195,6 @@ class TestComputeTypeBatchSizeInert:
             if 'os.getenv("CACHE_DIR"' in line or "os.getenv('CACHE_DIR'" in line
         ], "CACHE_DIR default should not be the Docker container path /.cache"
         # Verify the actual default is set to the native path
-        import app.pipeline as pipeline_mod
 
         expected_default = os.path.expanduser("~/.cache/whisperx-asr")
         # If CACHE_DIR env is not set, the default must be the native path
@@ -214,9 +207,7 @@ class TestComputeTypeBatchSizeInert:
         source = inspect.getsource(pipeline_mod)
         for line in source.splitlines():
             if 'os.getenv("DEVICE"' in line or "os.getenv('DEVICE'" in line:
-                assert '"cpu"' in line or "'cpu'" in line, (
-                    f"DEVICE default should be 'cpu': {line.strip()}"
-                )
+                assert '"cpu"' in line or "'cpu'" in line, f"DEVICE default should be 'cpu': {line.strip()}"
                 assert '"cuda"' not in line and "'cuda'" not in line, (
                     f"DEVICE default must not be 'cuda': {line.strip()}"
                 )

@@ -19,26 +19,37 @@ Covers VAL-MODELS-001 through VAL-MODELS-018:
 - whisper-1 owned_by "openai"
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
-
 # ---------------------------------------------------------------------------
 # Expected model names (from MLX_MODEL_MAP in pipeline.py)
 # ---------------------------------------------------------------------------
 EXPECTED_MLX_MODELS = [
-    "tiny", "tiny.en", "base", "base.en",
-    "small", "small.en", "medium", "medium.en",
-    "large", "large-v1", "large-v2", "large-v3",
-    "large-v3-turbo", "turbo",
+    "tiny",
+    "tiny.en",
+    "base",
+    "base.en",
+    "small",
+    "small.en",
+    "medium",
+    "medium.en",
+    "large",
+    "large-v1",
+    "large-v2",
+    "large-v3",
+    "large-v3-turbo",
+    "turbo",
 ]
 
 FASTER_WHISPER_ONLY_MODELS = [
-    "distil-large-v2", "distil-medium.en",
-    "distil-small.en", "distil-large-v3",
+    "distil-large-v2",
+    "distil-medium.en",
+    "distil-small.en",
+    "distil-large-v3",
     "distil-large-v3.5",
 ]
 
@@ -179,6 +190,7 @@ class TestNoFasterWhisperDependency:
     def test_no_faster_whisper_import_in_pipeline(self):
         """Verify pipeline.py does not import faster_whisper."""
         import inspect
+
         from app.pipeline import get_canonical_models
 
         source = inspect.getsource(get_canonical_models)
@@ -188,6 +200,7 @@ class TestNoFasterWhisperDependency:
     def test_no_faster_whisper_import_in_openai_compat(self):
         """Verify openai_compat.py does not import faster_whisper."""
         import inspect
+
         from app.openai_compat import _build_available_models
 
         source = inspect.getsource(_build_available_models)
@@ -385,4 +398,6 @@ class TestWhisper1OwnedByOpenAI:
         resp = client.get("/v1/models")
         for entry in resp.json()["data"]:
             if entry["id"] != "whisper-1":
-                assert entry["owned_by"] == "whispermlx", f"Expected owned_by='whispermlx', got '{entry['owned_by']}' for {entry['id']}"
+                assert entry["owned_by"] == "whispermlx", (
+                    f"Expected owned_by='whispermlx', got '{entry['owned_by']}' for {entry['id']}"
+                )

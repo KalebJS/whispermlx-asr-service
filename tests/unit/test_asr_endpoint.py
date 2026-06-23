@@ -4,14 +4,11 @@ Tests are fast: pipeline is mocked, no model downloads, no GPU required.
 Covers: response shapes, parameter handling, error paths, model validation.
 """
 
-import io
-import logging
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -49,21 +46,32 @@ def _mock_pipeline_result(segments=None, language="en", word_segments=None):
 @pytest.fixture()
 def client():
     """Create a TestClient with pipeline functions mocked."""
-    with patch("app.main.run_in_queue") as mock_queue, patch(
-        "app.main.whispermlx"
-    ) as mock_wmlx, patch("app.main.load_whisper_model"), patch(
-        "app.main.resolve_model_name"
-    ) as mock_resolve, patch(
-        "app.main.get_canonical_models"
-    ) as mock_canonical:
+    with (
+        patch("app.main.run_in_queue") as mock_queue,
+        patch("app.main.whispermlx") as mock_wmlx,
+        patch("app.main.load_whisper_model"),
+        patch("app.main.resolve_model_name") as mock_resolve,
+        patch("app.main.get_canonical_models") as mock_canonical,
+    ):
         # Default: resolve returns the model unchanged (canonical names)
         mock_resolve.side_effect = lambda m: m if m else "large-v3"
 
         # Default canonical models list
         mock_canonical.return_value = [
-            "tiny", "tiny.en", "base", "base.en", "small", "small.en",
-            "medium", "medium.en", "large", "large-v1", "large-v2",
-            "large-v3", "large-v3-turbo", "turbo",
+            "tiny",
+            "tiny.en",
+            "base",
+            "base.en",
+            "small",
+            "small.en",
+            "medium",
+            "medium.en",
+            "large",
+            "large-v1",
+            "large-v2",
+            "large-v3",
+            "large-v3-turbo",
+            "turbo",
         ]
 
         # Mock whispermlx.load_audio to return a numpy array
@@ -86,18 +94,29 @@ def client():
 @pytest.fixture()
 def client_with_pipeline_mock():
     """Create a TestClient with run_pipeline fully mocked to return controlled results."""
-    with patch("app.main.run_in_queue") as mock_queue, patch(
-        "app.main.whispermlx"
-    ) as mock_wmlx, patch("app.main.resolve_model_name") as mock_resolve, patch(
-        "app.main.get_canonical_models"
-    ) as mock_canonical, patch(
-        "app.main.run_pipeline"
+    with (
+        patch("app.main.run_in_queue") as mock_queue,
+        patch("app.main.whispermlx") as mock_wmlx,
+        patch("app.main.resolve_model_name") as mock_resolve,
+        patch("app.main.get_canonical_models") as mock_canonical,
+        patch("app.main.run_pipeline"),
     ):
         mock_resolve.side_effect = lambda m: m if m else "large-v3"
         mock_canonical.return_value = [
-            "tiny", "tiny.en", "base", "base.en", "small", "small.en",
-            "medium", "medium.en", "large", "large-v1", "large-v2",
-            "large-v3", "large-v3-turbo", "turbo",
+            "tiny",
+            "tiny.en",
+            "base",
+            "base.en",
+            "small",
+            "small.en",
+            "medium",
+            "medium.en",
+            "large",
+            "large-v1",
+            "large-v2",
+            "large-v3",
+            "large-v3-turbo",
+            "turbo",
         ]
         mock_wmlx.load_audio.return_value = np.zeros(16000, dtype=np.float32)
 
@@ -154,9 +173,10 @@ class TestAsrResponseShape:
         body = resp.json()
         # text must be an array mirroring segments (legacy whisper-asr-webservice shape)
         assert isinstance(body["text"], list), f"text should be list, got {type(body['text'])}"
-        assert len(body["text"]) == len(body["segments"]), \
+        assert len(body["text"]) == len(body["segments"]), (
             f"text length ({len(body['text'])}) != segments length ({len(body['segments'])})"
-        for i, (t, s) in enumerate(zip(body["text"], body["segments"])):
+        )
+        for i, (t, s) in enumerate(zip(body["text"], body["segments"], strict=False)):
             assert t["text"] == s["text"], f"text[{i}].text != segments[{i}].text"
             assert t["start"] == s["start"], f"text[{i}].start != segments[{i}].start"
             assert t["end"] == s["end"], f"text[{i}].end != segments[{i}].end"
@@ -219,8 +239,9 @@ class TestAsrResponseShape:
             files={"audio_file": ("test.wav", FAKE_AUDIO, "audio/wav")},
         )
         assert resp.status_code == 200
-        assert "application/json" in resp.headers.get("content-type", ""), \
+        assert "application/json" in resp.headers.get("content-type", ""), (
             f"Expected application/json, got {resp.headers.get('content-type')}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -277,12 +298,14 @@ class TestWordTimestamps:
         assert resp.status_code == 200
         body = resp.json()
         # word_segments should be empty (result has no word_segments key -> defaults to [])
-        assert body["word_segments"] == [], \
+        assert body["word_segments"] == [], (
             f"word_segments should be empty with word_timestamps=false, got {body['word_segments']}"
+        )
         # Segments should NOT have words entries
         for seg in body["segments"]:
-            assert "words" not in seg or len(seg.get("words", [])) == 0, \
+            assert "words" not in seg or len(seg.get("words", [])) == 0, (
                 f"Segment has words despite word_timestamps=false: {seg}"
+            )
 
     def test_word_timestamps_defaults_to_true(self, client_with_pipeline_mock):
         """Omitting word_timestamps defaults to true (alignment runs)."""
@@ -301,8 +324,7 @@ class TestWordTimestamps:
         assert resp.status_code == 200
         body = resp.json()
         # Default is true, so word-level timestamps should be present
-        assert len(body["word_segments"]) > 0, \
-            "word_segments empty when word_timestamps defaulted to true"
+        assert len(body["word_segments"]) > 0, "word_segments empty when word_timestamps defaulted to true"
 
 
 # ---------------------------------------------------------------------------
@@ -415,7 +437,7 @@ class TestModelSelection:
         result = _mock_pipeline_result()
 
         # When model is empty string, resolve returns DEFAULT_MODEL
-        mock_resolve.side_effect = lambda m: "large-v3" if not m else m
+        mock_resolve.side_effect = lambda m: m if m else "large-v3"
 
         async def _return_result(*args, **kwargs):
             return result, None
@@ -472,8 +494,7 @@ class TestLanguageHandling:
         )
         assert resp.status_code == 200
         body = resp.json()
-        assert body["language"] is not None and body["language"] != "", \
-            "Language should be populated by auto-detection"
+        assert body["language"] is not None and body["language"] != "", "Language should be populated by auto-detection"
 
     def test_language_never_empty_on_success(self, client_with_pipeline_mock):
         """On any successful transcription, language is a non-empty string."""
@@ -491,8 +512,9 @@ class TestLanguageHandling:
         )
         assert resp.status_code == 200
         body = resp.json()
-        assert isinstance(body["language"], str) and len(body["language"]) > 0, \
+        assert isinstance(body["language"], str) and len(body["language"]) > 0, (
             f"language should be non-empty string, got: {body['language']}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -549,8 +571,7 @@ class TestPromptAndHotwords:
             "/asr?hotwords=Foo,Bar&initial_prompt=Hello",
             files={"audio_file": ("test.wav", FAKE_AUDIO, "audio/wav")},
         )
-        assert resp.status_code == 200, \
-            f"hotwords+initial_prompt should both be accepted, got {resp.status_code}"
+        assert resp.status_code == 200, f"hotwords+initial_prompt should both be accepted, got {resp.status_code}"
 
 
 # ---------------------------------------------------------------------------
@@ -684,8 +705,9 @@ class TestSegmentOrdering:
         body = resp.json()
         segments = body["segments"]
         for i in range(len(segments) - 1):
-            assert segments[i]["start"] <= segments[i + 1]["start"], \
-                f"Segment {i} start ({segments[i]['start']}) > segment {i+1} start ({segments[i+1]['start']})"
+            assert segments[i]["start"] <= segments[i + 1]["start"], (
+                f"Segment {i} start ({segments[i]['start']}) > segment {i + 1} start ({segments[i + 1]['start']})"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -715,7 +737,7 @@ class TestWordTimestampBounds:
         for seg in body["segments"]:
             if "words" in seg:
                 for word in seg["words"]:
-                    assert word["start"] >= seg["start"] - 0.01, \
+                    assert word["start"] >= seg["start"] - 0.01, (
                         f"Word start {word['start']} < segment start {seg['start']}"
-                    assert word["end"] <= seg["end"] + 0.01, \
-                        f"Word end {word['end']} > segment end {seg['end']}"
+                    )
+                    assert word["end"] <= seg["end"] + 0.01, f"Word end {word['end']} > segment end {seg['end']}"

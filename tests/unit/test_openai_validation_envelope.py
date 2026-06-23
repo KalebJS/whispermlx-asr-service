@@ -13,12 +13,11 @@ Tests cover:
 - OpenAI envelope has message, type, param, code fields
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -27,9 +26,20 @@ from fastapi.testclient import TestClient
 FAKE_AUDIO = b"RIFF" + b"\x00" * 100  # minimal WAV-like bytes
 
 CANONICAL_MODELS = [
-    "tiny", "tiny.en", "base", "base.en", "small", "small.en",
-    "medium", "medium.en", "large", "large-v1", "large-v2",
-    "large-v3", "large-v3-turbo", "turbo",
+    "tiny",
+    "tiny.en",
+    "base",
+    "base.en",
+    "small",
+    "small.en",
+    "medium",
+    "medium.en",
+    "large",
+    "large-v1",
+    "large-v2",
+    "large-v3",
+    "large-v3-turbo",
+    "turbo",
 ]
 
 
@@ -100,7 +110,7 @@ def client():
             if m in aliases:
                 return aliases[m]
             if m.startswith("whisper-"):
-                stripped = m[len("whisper-"):]
+                stripped = m[len("whisper-") :]
                 if stripped in CANONICAL_MODELS:
                     return stripped
             return m

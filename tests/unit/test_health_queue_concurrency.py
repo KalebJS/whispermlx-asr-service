@@ -424,3 +424,29 @@ class TestQueueMetricsShape:
         resp = c.get("/queue-metrics")
         q = resp.json()["queue"]
         assert q["gpu_concurrency"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Lifespan API: no deprecated @app.on_event("startup")
+# ---------------------------------------------------------------------------
+
+
+class TestLifespanApi:
+    """Verify the app uses the modern lifespan context-manager API,
+    not the deprecated @app.on_event("startup") handler."""
+
+    def test_no_on_event_startup_decorator(self):
+        """app/main.py must not contain @app.on_event('startup')."""
+        import inspect
+
+        import app.main as main_mod
+
+        src = inspect.getsource(main_mod)
+        assert "@app.on_event" not in src, "Deprecated @app.on_event decorator found in app/main.py"
+
+    def test_lifespan_preload_model_works(self, client_with_preload):
+        """PRELOAD_MODEL still warms the model at startup via the lifespan API."""
+        c, _ = client_with_preload
+        resp = c.get("/health")
+        loaded = resp.json()["loaded_models"]
+        assert "base" in loaded, "PRELOAD_MODEL=base should appear in loaded_models at startup via lifespan"

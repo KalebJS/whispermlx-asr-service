@@ -12,13 +12,11 @@ Covers VAL-OAI-026 through VAL-OAI-032 and VAL-CROSS-013:
 - diarization + translation yields English text with speaker labels
 """
 
-import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -99,9 +97,20 @@ def _make_translation_result(
 
 
 CANONICAL_MODELS = [
-    "tiny", "tiny.en", "base", "base.en", "small", "small.en",
-    "medium", "medium.en", "large", "large-v1", "large-v2",
-    "large-v3", "large-v3-turbo", "turbo",
+    "tiny",
+    "tiny.en",
+    "base",
+    "base.en",
+    "small",
+    "small.en",
+    "medium",
+    "medium.en",
+    "large",
+    "large-v1",
+    "large-v2",
+    "large-v3",
+    "large-v3-turbo",
+    "turbo",
 ]
 
 
@@ -139,7 +148,7 @@ def client():
             if m in aliases:
                 return aliases[m]
             if m.startswith("whisper-"):
-                stripped = m[len("whisper-"):]
+                stripped = m[len("whisper-") :]
                 if stripped in CANONICAL_MODELS:
                     return stripped
             return m
@@ -221,22 +230,27 @@ class TestVerboseJsonFormat:
 
     def test_verbose_json_task_is_translate(self, client):
         c, _, _ = client
-        resp = _post_translations(c, {
-            "model": "whisper-1",
-            "response_format": "verbose_json",
-        })
+        resp = _post_translations(
+            c,
+            {
+                "model": "whisper-1",
+                "response_format": "verbose_json",
+            },
+        )
         assert resp.status_code == 200
         body = resp.json()
-        assert body["task"] == "translate", \
-            f"Expected task='translate', got task='{body.get('task')}'"
+        assert body["task"] == "translate", f"Expected task='translate', got task='{body.get('task')}'"
 
     def test_verbose_json_has_required_fields(self, client):
         """Verbose JSON must include language, duration, text, and segments."""
         c, _, _ = client
-        resp = _post_translations(c, {
-            "model": "whisper-1",
-            "response_format": "verbose_json",
-        })
+        resp = _post_translations(
+            c,
+            {
+                "model": "whisper-1",
+                "response_format": "verbose_json",
+            },
+        )
         assert resp.status_code == 200
         body = resp.json()
         assert body["task"] == "translate"
@@ -250,10 +264,13 @@ class TestVerboseJsonFormat:
     def test_verbose_json_default_has_segments_no_words(self, client):
         """Default verbose_json has segments but no words."""
         c, _, _ = client
-        resp = _post_translations(c, {
-            "model": "whisper-1",
-            "response_format": "verbose_json",
-        })
+        resp = _post_translations(
+            c,
+            {
+                "model": "whisper-1",
+                "response_format": "verbose_json",
+            },
+        )
         assert resp.status_code == 200
         body = resp.json()
         assert len(body["segments"]) > 0
@@ -262,11 +279,14 @@ class TestVerboseJsonFormat:
     def test_verbose_json_with_word_granularity(self, client):
         """verbose_json + timestamp_granularities[]=word includes words."""
         c, _, _ = client
-        resp = _post_translations(c, {
-            "model": "whisper-1",
-            "response_format": "verbose_json",
-            "timestamp_granularities[]": "word",
-        })
+        resp = _post_translations(
+            c,
+            {
+                "model": "whisper-1",
+                "response_format": "verbose_json",
+                "timestamp_granularities[]": "word",
+            },
+        )
         assert resp.status_code == 200
         body = resp.json()
         assert body["task"] == "translate"
@@ -276,10 +296,13 @@ class TestVerboseJsonFormat:
     def test_verbose_json_segment_fields(self, client):
         """Segments have the full OpenAI field set."""
         c, _, _ = client
-        resp = _post_translations(c, {
-            "model": "whisper-1",
-            "response_format": "verbose_json",
-        })
+        resp = _post_translations(
+            c,
+            {
+                "model": "whisper-1",
+                "response_format": "verbose_json",
+            },
+        )
         assert resp.status_code == 200
         body = resp.json()
         for seg in body["segments"]:
@@ -325,12 +348,12 @@ class TestLanguageParamNotAccepted:
     def test_no_language_in_endpoint_signature(self):
         """The create_translation function must NOT declare a language Form param."""
         import inspect
+
         from app.openai_compat import create_translation
 
         sig = inspect.signature(create_translation)
         param_names = list(sig.parameters.keys())
-        assert "language" not in param_names, \
-            f"create_translation must not have 'language' param; got: {param_names}"
+        assert "language" not in param_names, f"create_translation must not have 'language' param; got: {param_names}"
 
     def test_language_does_not_steer_output(self, client):
         """Even with language=fr, the task=translate still produces English."""
@@ -355,41 +378,53 @@ class TestPromptAndHotwords:
     def test_prompt_accepted(self, client):
         """prompt parameter is accepted without error (200)."""
         c, mock_queue, _ = client
-        resp = _post_translations(c, {
-            "model": "whisper-1",
-            "prompt": "context phrase for translation",
-        })
+        resp = _post_translations(
+            c,
+            {
+                "model": "whisper-1",
+                "prompt": "context phrase for translation",
+            },
+        )
         assert resp.status_code == 200
         assert "text" in resp.json()
 
     def test_hotwords_accepted_no_error(self, client):
         """hotwords parameter is accepted without error (200, hotwords ignored)."""
         c, _, _ = client
-        resp = _post_translations(c, {
-            "model": "whisper-1",
-            "hotwords": "Speaker,CTranslate2",
-        })
+        resp = _post_translations(
+            c,
+            {
+                "model": "whisper-1",
+                "hotwords": "Speaker,CTranslate2",
+            },
+        )
         assert resp.status_code == 200
         assert "text" in resp.json()
 
     def test_prompt_and_hotwords_together(self, client):
         """Both prompt and hotwords together are accepted without error."""
         c, _, _ = client
-        resp = _post_translations(c, {
-            "model": "whisper-1",
-            "prompt": "context phrase",
-            "hotwords": "Foo,Bar",
-        })
+        resp = _post_translations(
+            c,
+            {
+                "model": "whisper-1",
+                "prompt": "context phrase",
+                "hotwords": "Foo,Bar",
+            },
+        )
         assert resp.status_code == 200
         assert "text" in resp.json()
 
     def test_prompt_passed_as_initial_prompt(self, client):
         """prompt is passed as initial_prompt to the pipeline (via process_audio)."""
         c, mock_queue, _ = client
-        resp = _post_translations(c, {
-            "model": "whisper-1",
-            "prompt": "test prompt",
-        })
+        resp = _post_translations(
+            c,
+            {
+                "model": "whisper-1",
+                "prompt": "test prompt",
+            },
+        )
         assert resp.status_code == 200
         # Verify that the queue was called (meaning process_audio was invoked)
         assert mock_queue.called, "run_in_queue should have been called"
@@ -406,10 +441,13 @@ class TestResponseFormats:
     def test_json_format(self, client):
         """response_format=json returns {text}."""
         c, _, _ = client
-        resp = _post_translations(c, {
-            "model": "whisper-1",
-            "response_format": "json",
-        })
+        resp = _post_translations(
+            c,
+            {
+                "model": "whisper-1",
+                "response_format": "json",
+            },
+        )
         assert resp.status_code == 200
         body = resp.json()
         assert "text" in body
@@ -418,10 +456,13 @@ class TestResponseFormats:
     def test_text_format(self, client):
         """response_format=text returns plain text."""
         c, _, _ = client
-        resp = _post_translations(c, {
-            "model": "whisper-1",
-            "response_format": "text",
-        })
+        resp = _post_translations(
+            c,
+            {
+                "model": "whisper-1",
+                "response_format": "text",
+            },
+        )
         assert resp.status_code == 200
         assert resp.text == "Hello world this is a translation"
         ct = resp.headers.get("content-type", "")
@@ -430,49 +471,63 @@ class TestResponseFormats:
     def test_srt_format(self, client):
         """response_format=srt returns valid SRT."""
         c, _, _ = client
-        resp = _post_translations(c, {
-            "model": "whisper-1",
-            "response_format": "srt",
-        })
+        resp = _post_translations(
+            c,
+            {
+                "model": "whisper-1",
+                "response_format": "srt",
+            },
+        )
         assert resp.status_code == 200
         body = resp.text
         assert "1\n" in body
         assert "-->" in body
         import re
+
         timecode_pattern = r"\d{2}:\d{2}:\d{2},\d{3}\s*-->\s*\d{2}:\d{2}:\d{2},\d{3}"
         assert re.search(timecode_pattern, body)
 
     def test_srt_content_type_text_plain(self, client):
         """SRT format returns Content-Type: text/plain."""
         c, _, _ = client
-        resp = _post_translations(c, {
-            "model": "whisper-1",
-            "response_format": "srt",
-        })
+        resp = _post_translations(
+            c,
+            {
+                "model": "whisper-1",
+                "response_format": "srt",
+            },
+        )
         ct = resp.headers.get("content-type", "")
         assert ct.startswith("text/plain")
 
     def test_vtt_format(self, client):
         """response_format=vtt returns WEBVTT."""
         c, _, _ = client
-        resp = _post_translations(c, {
-            "model": "whisper-1",
-            "response_format": "vtt",
-        })
+        resp = _post_translations(
+            c,
+            {
+                "model": "whisper-1",
+                "response_format": "vtt",
+            },
+        )
         assert resp.status_code == 200
         body = resp.text
         assert body.startswith("WEBVTT")
         import re
+
         timecode_pattern = r"\d{2}:\d{2}:\d{2}\.\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}\.\d{3}"
         assert re.search(timecode_pattern, body)
 
     def test_verbose_json_format(self, client):
         """response_format=verbose_json returns full object with task=translate."""
         c, _, _ = client
-        resp = _post_translations(c, {
-            "model": "whisper-1",
-            "response_format": "verbose_json",
-        })
+        resp = _post_translations(
+            c,
+            {
+                "model": "whisper-1",
+                "response_format": "verbose_json",
+            },
+        )
         assert resp.status_code == 200
         body = resp.json()
         assert body["task"] == "translate"
@@ -492,11 +547,14 @@ class TestTimestampGranularitiesWithoutVerboseJson:
 
     def test_granularities_with_json_format_returns_400(self, client):
         c, _, _ = client
-        resp = _post_translations(c, {
-            "model": "whisper-1",
-            "response_format": "json",
-            "timestamp_granularities[]": "word",
-        })
+        resp = _post_translations(
+            c,
+            {
+                "model": "whisper-1",
+                "response_format": "json",
+                "timestamp_granularities[]": "word",
+            },
+        )
         assert resp.status_code == 400
         body = resp.json()
         assert "error" in body
@@ -504,30 +562,39 @@ class TestTimestampGranularitiesWithoutVerboseJson:
 
     def test_granularities_with_text_format_returns_400(self, client):
         c, _, _ = client
-        resp = _post_translations(c, {
-            "model": "whisper-1",
-            "response_format": "text",
-            "timestamp_granularities[]": "word",
-        })
+        resp = _post_translations(
+            c,
+            {
+                "model": "whisper-1",
+                "response_format": "text",
+                "timestamp_granularities[]": "word",
+            },
+        )
         assert resp.status_code == 400
 
     def test_granularities_with_srt_format_returns_400(self, client):
         c, _, _ = client
-        resp = _post_translations(c, {
-            "model": "whisper-1",
-            "response_format": "srt",
-            "timestamp_granularities[]": "word",
-        })
+        resp = _post_translations(
+            c,
+            {
+                "model": "whisper-1",
+                "response_format": "srt",
+                "timestamp_granularities[]": "word",
+            },
+        )
         assert resp.status_code == 400
 
     def test_granularities_error_has_openai_envelope(self, client):
         """400 error uses the OpenAI error envelope shape."""
         c, _, _ = client
-        resp = _post_translations(c, {
-            "model": "whisper-1",
-            "response_format": "json",
-            "timestamp_granularities[]": "word",
-        })
+        resp = _post_translations(
+            c,
+            {
+                "model": "whisper-1",
+                "response_format": "json",
+                "timestamp_granularities[]": "word",
+            },
+        )
         body = resp.json()
         assert "error" in body
         error = body["error"]
@@ -584,6 +651,7 @@ class TestInvalidModel:
 # ===================================================================
 # VAL-CROSS-013: Diarization + translation yields English text WITH speaker labels
 # ===================================================================
+
 
 class TestDiarizationWithTranslation:
     """
@@ -643,8 +711,7 @@ class TestDiarizationWithTranslation:
 
         # Speaker labels should be present with >=2 distinct speakers
         speakers = {seg.get("speaker") for seg in segments if seg.get("speaker")}
-        assert len(speakers) >= 2, \
-            f"Expected >=2 distinct speakers with diarize=true+translate, got: {speakers}"
+        assert len(speakers) >= 2, f"Expected >=2 distinct speakers with diarize=true+translate, got: {speakers}"
 
     def test_speaker_labels_match_format(self, asr_client):
         """Speaker labels follow SPEAKER_NN format."""
@@ -656,10 +723,12 @@ class TestDiarizationWithTranslation:
         assert resp.status_code == 200
         body = resp.json()
         import re
+
         for seg in body["segments"]:
             if seg.get("speaker"):
-                assert re.match(r"^SPEAKER_\d+$", seg["speaker"]), \
+                assert re.match(r"^SPEAKER_\d+$", seg["speaker"]), (
                     f"Speaker label '{seg['speaker']}' doesn't match SPEAKER_NN format"
+                )
 
     def test_translate_diarize_task_passed_to_pipeline(self, asr_client):
         """task=translate is passed through to the pipeline."""
@@ -685,10 +754,10 @@ class TestDiarizationWithTranslation:
             files={"audio_file": ("test.wav", FAKE_AUDIO, "audio/wav")},
         )
         assert resp.status_code == 200
-        assert captured_args.get("task") == "translate", \
-            f"task should be 'translate', got: {captured_args.get('task')}"
-        assert captured_args.get("should_diarize") is True, \
+        assert captured_args.get("task") == "translate", f"task should be 'translate', got: {captured_args.get('task')}"
+        assert captured_args.get("should_diarize") is True, (
             f"should_diarize should be True, got: {captured_args.get('should_diarize')}"
+        )
 
 
 # ===================================================================
@@ -718,11 +787,14 @@ class TestTranslationTextConsistency:
         resp_json = _post_translations(c, {"model": "whisper-1", "response_format": "json"})
         json_text = resp_json.json()["text"].strip()
 
-        resp_verbose = _post_translations(c, {
-            "model": "whisper-1",
-            "response_format": "verbose_json",
-            "timestamp_granularities[]": ["segment", "word"],
-        })
+        resp_verbose = _post_translations(
+            c,
+            {
+                "model": "whisper-1",
+                "response_format": "verbose_json",
+                "timestamp_granularities[]": ["segment", "word"],
+            },
+        )
         verbose_text = resp_verbose.json()["text"].strip()
 
         assert json_text == verbose_text
@@ -772,10 +844,13 @@ class TestTemperatureValidation:
 
     def test_temperature_out_of_range_returns_400(self, client):
         c, _, _ = client
-        resp = _post_translations(c, {
-            "model": "whisper-1",
-            "temperature": "1.5",
-        })
+        resp = _post_translations(
+            c,
+            {
+                "model": "whisper-1",
+                "temperature": "1.5",
+            },
+        )
         assert resp.status_code == 400
         body = resp.json()
         assert "error" in body
@@ -783,10 +858,13 @@ class TestTemperatureValidation:
 
     def test_temperature_in_range_accepted(self, client):
         c, _, _ = client
-        resp = _post_translations(c, {
-            "model": "whisper-1",
-            "temperature": "0.5",
-        })
+        resp = _post_translations(
+            c,
+            {
+                "model": "whisper-1",
+                "temperature": "0.5",
+            },
+        )
         assert resp.status_code == 200
 
 

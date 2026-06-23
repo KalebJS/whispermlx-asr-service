@@ -51,9 +51,7 @@ async def run_in_queue(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any
     _requests_in_flight += 1
     try:
         loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            _executor, lambda: fn(*args, **kwargs)
-        )
+        result = await loop.run_in_executor(_executor, lambda: fn(*args, **kwargs))
         return result
     finally:
         _requests_in_flight -= 1
