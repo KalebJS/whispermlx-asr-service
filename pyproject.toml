@@ -4,6 +4,19 @@ version = "0.4.0"
 description = "Native Apple-Silicon ASR service powered by whispermlx (MLX) with FastAPI"
 requires-python = ">=3.13,<3.14"
 license = "MIT"
+readme = "README.md"
+authors = [
+    { name = "Kaleb Smith" },
+]
+keywords = ["whisper", "mlx", "asr", "speech-recognition", "fastapi", "apple-silicon", "diarization"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS :: MacOS X",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
 dependencies = [
     "whispermlx",
     "fastapi",
@@ -13,10 +26,17 @@ dependencies = [
     "prometheus-client",
 ]
 
+[project.urls]
+Homepage = "https://github.com/KalebJS/whisperx-asr-service"
+Repository = "https://github.com/KalebJS/whisperx-asr-service"
+Issues = "https://github.com/KalebJS/whisperx-asr-service/issues"
+Changelog = "https://github.com/KalebJS/whisperx-asr-service/blob/main/CHANGELOG.md"
+
 [dependency-groups]
 dev = [
     "pytest",
     "ruff",
+    "bandit",
     "commitizen",
     "httpx",
 ]
@@ -52,6 +72,17 @@ ignore = [
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+
+[tool.ruff.lint.isort]
+force-single-line = true
+
+[tool.bandit]
+targets = ["app"]
+exclude_dirs = ["tests", ".venv", "__pycache__"]
+skips = [
+    "B104",  # hardcoded bind address 0.0.0.0 — intentional for entrypoint.sh
+    "B110",  # try_except_pass — intentional for best-effort metrics/cleanup
+]
 
 [tool.commitizen]
 name = "cz_conventional_commits"

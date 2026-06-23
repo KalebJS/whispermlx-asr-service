@@ -12,31 +12,29 @@ import time
 from pathlib import Path
 
 import whispermlx
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi import APIRouter
+from fastapi import File
+from fastapi import Form
+from fastapi import HTTPException
+from fastapi import Request
+from fastapi import UploadFile
+from fastapi.responses import JSONResponse
+from fastapi.responses import PlainTextResponse
 
 from app import metrics as prom_metrics
-from app.pipeline import (
-    DEFAULT_MODEL,
-    format_timestamp,
-    get_canonical_models,
-    resolve_model_name,
-)
-from app.pipeline import (
-    align as pipeline_align,
-)
-from app.pipeline import (
-    transcribe as pipeline_transcribe,
-)
+from app.pipeline import DEFAULT_MODEL
+from app.pipeline import align as pipeline_align
+from app.pipeline import format_timestamp
+from app.pipeline import get_canonical_models
+from app.pipeline import resolve_model_name
+from app.pipeline import transcribe as pipeline_transcribe
 from app.queue import run_in_queue
-from app.schemas import (
-    OpenAIErrorDetail,
-    OpenAIErrorResponse,
-    ResponseFormat,
-    TranscriptionSegment,
-    TranscriptionVerboseJsonResponse,
-    TranscriptionWord,
-)
+from app.schemas import OpenAIErrorDetail
+from app.schemas import OpenAIErrorResponse
+from app.schemas import ResponseFormat
+from app.schemas import TranscriptionSegment
+from app.schemas import TranscriptionVerboseJsonResponse
+from app.schemas import TranscriptionWord
 
 logger = logging.getLogger(__name__)
 

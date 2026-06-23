@@ -6,7 +6,8 @@ no-change, no-overlapping-turns preservation, text apportionment, no 'words'
 key added, and integration with diarize() function.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd

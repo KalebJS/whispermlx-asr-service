@@ -9,7 +9,8 @@ All tests mock whispermlx so no real model downloads occur.
 import asyncio
 import os
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -69,7 +70,8 @@ def client_no_preload():
         from app.main import app
 
         # Clear pipeline caches for a clean state
-        from app.pipeline import _whisper_models, _whisper_models_last_used
+        from app.pipeline import _whisper_models
+        from app.pipeline import _whisper_models_last_used
 
         _whisper_models.clear()
         _whisper_models_last_used.clear()
@@ -97,7 +99,8 @@ def client_with_preload():
     ):
         # The startup event calls load_whisper_model("base") — let it
         # succeed by having pipeline.load_whisper_model add to the cache.
-        from app.pipeline import _whisper_models, _whisper_models_last_used
+        from app.pipeline import _whisper_models
+        from app.pipeline import _whisper_models_last_used
 
         _whisper_models.clear()
         _whisper_models_last_used.clear()
@@ -337,7 +340,9 @@ class TestQueueConcurrency:
         """
         VAL-CROSS-006: While tasks run, requests_in_flight <= gpu_concurrency.
         """
-        from app.queue import GPU_CONCURRENCY, get_queue_metrics, run_in_queue
+        from app.queue import GPU_CONCURRENCY
+        from app.queue import get_queue_metrics
+        from app.queue import run_in_queue
 
         in_flight_snapshots = []
 
@@ -369,13 +374,15 @@ class TestQueueConcurrency:
         VAL-CROSS-017: /asr and /v1/audio/transcriptions both import
         run_in_queue from the same app.queue module, sharing the semaphore.
         """
-        from app import main, openai_compat
+        from app import main
+        from app import openai_compat
 
         assert main.run_in_queue is openai_compat.run_in_queue
 
     def test_queue_drains_to_zero(self):
         """After requests complete, in-flight and queued counters return to 0."""
-        from app.queue import get_queue_metrics, run_in_queue
+        from app.queue import get_queue_metrics
+        from app.queue import run_in_queue
 
         def blocking_fn():
             return "ok"

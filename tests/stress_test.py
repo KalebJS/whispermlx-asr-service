@@ -28,7 +28,8 @@ import json
 import statistics
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from dataclasses import field
 from pathlib import Path
 
 import requests

@@ -1,13 +1,11 @@
 """Prometheus metric definitions and helpers, shared by main.py."""
 
-from prometheus_client import (
-    CONTENT_TYPE_LATEST,
-    Counter,
-    Gauge,
-    Histogram,
-    Info,
-    generate_latest,
-)
+from prometheus_client import CONTENT_TYPE_LATEST
+from prometheus_client import Counter
+from prometheus_client import Gauge
+from prometheus_client import Histogram
+from prometheus_client import Info
+from prometheus_client import generate_latest
 
 REQUESTS_TOTAL = Counter(
     "whisperx_requests_total",

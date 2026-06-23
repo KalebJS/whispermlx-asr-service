@@ -9,7 +9,8 @@ All tests mock whispermlx so no real model downloads occur.
 import io
 import os
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -73,7 +74,8 @@ def client():
         patch("app.openai_compat.run_in_queue") as mock_oai_queue,
         patch.dict(os.environ, {"PRELOAD_MODEL": "", "DEVICE": "cpu", "SERVE_MODE": "simple"}, clear=False),
     ):
-        from app.pipeline import _whisper_models, _whisper_models_last_used
+        from app.pipeline import _whisper_models
+        from app.pipeline import _whisper_models_last_used
 
         _whisper_models.clear()
         _whisper_models_last_used.clear()
@@ -108,7 +110,8 @@ def client_with_preload():
         patch("app.openai_compat.whispermlx", wmlx),
         patch.dict(os.environ, {"PRELOAD_MODEL": "base", "DEVICE": "cpu", "SERVE_MODE": "simple"}, clear=False),
     ):
-        from app.pipeline import _whisper_models, _whisper_models_last_used
+        from app.pipeline import _whisper_models
+        from app.pipeline import _whisper_models_last_used
 
         _whisper_models.clear()
         _whisper_models_last_used.clear()

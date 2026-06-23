@@ -6,7 +6,8 @@ embeddings, exclusive_speaker_diarization, graceful skip, assign_word_speakers.
 """
 
 import logging
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import numpy as np
 
