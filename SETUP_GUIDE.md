@@ -65,8 +65,8 @@ This guide walks you through setting up the native Apple-Silicon ASR service pow
 ### Step 1: Clone the Repository
 
 ```bash
-git clone https://github.com/KalebJS/whisperx-asr-service.git
-cd whisperx-asr-service
+git clone https://github.com/KalebJS/whispermlx-asr-service.git
+cd whispermlx-asr-service
 ```
 
 ### Step 2: Create Virtual Environment and Install Dependencies

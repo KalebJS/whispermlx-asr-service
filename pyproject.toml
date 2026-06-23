@@ -27,10 +27,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/KalebJS/whisperx-asr-service"
-Repository = "https://github.com/KalebJS/whisperx-asr-service"
-Issues = "https://github.com/KalebJS/whisperx-asr-service/issues"
-Changelog = "https://github.com/KalebJS/whisperx-asr-service/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/KalebJS/whispermlx-asr-service"
+Repository = "https://github.com/KalebJS/whispermlx-asr-service"
+Issues = "https://github.com/KalebJS/whispermlx-asr-service/issues"
+Changelog = "https://github.com/KalebJS/whispermlx-asr-service/blob/main/CHANGELOG.md"
 
 [dependency-groups]
 dev = [

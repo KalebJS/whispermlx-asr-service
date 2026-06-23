@@ -1,10 +1,10 @@
 # Whispermlx ASR Service
 
-[![Version](https://img.shields.io/badge/version-0.4.0-blue.svg)](https://github.com/KalebJS/whisperx-asr-service/releases/tag/v0.4.0)
+[![Version](https://img.shields.io/badge/version-0.4.0-blue.svg)](https://github.com/KalebJS/whispermlx-asr-service/releases/tag/v0.4.0)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Platform: Apple Silicon](https://img.shields.io/badge/Platform-Apple%20Silicon%20%7C%20MLX-5856D6.svg)](https://github.com/ml-explore/mlx)
 [![Python: 3.13](https://img.shields.io/badge/Python-3.13-3776AB.svg)](https://www.python.org/downloads/)
-[![Status](https://img.shields.io/badge/status-alpha-orange.svg)](https://github.com/KalebJS/whisperx-asr-service)
+[![Status](https://img.shields.io/badge/status-alpha-orange.svg)](https://github.com/KalebJS/whispermlx-asr-service)
 
 **A native Apple-Silicon ASR API service powered by [whispermlx](https://pypi.org/project/whispermlx/) (MLX) with FastAPI.**
 
@@ -75,8 +75,8 @@ Memory requirements vary by model size:
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Clone the repository
-git clone https://github.com/KalebJS/whisperx-asr-service.git
-cd whisperx-asr-service
+git clone https://github.com/KalebJS/whispermlx-asr-service.git
+cd whispermlx-asr-service
 
 # Create a Python 3.13 virtual environment and install dependencies
 uv venv --python 3.13
