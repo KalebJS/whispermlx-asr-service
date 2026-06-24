@@ -72,6 +72,12 @@
 - Speaker diarization support
 - Docker deployment
 
+## v0.5.1 (2026-06-23)
+
+### Fix
+
+- default DEVICE to mps for fast diarization on Apple Silicon
+
 ## v0.5.0 (2026-06-23)
 
 ### Feat
