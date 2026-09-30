@@ -104,6 +104,19 @@ DIARIZE_FILL_NEAREST = os.getenv("DIARIZE_FILL_NEAREST", "false").strip().lower(
     "on",
 )
 
+# When True, segments are rebuilt at speaker-change boundaries after diarization
+# (using word-level speaker labels from the aligned path), so rapid turns are not
+# merged into one speaker's segment. Opt-in via env because it changes the
+# segment shape existing users are accustomed to. The word_timestamps=false path
+# already re-splits along diarization turns unconditionally
+# (_resplit_segments_on_diarization_turns).
+RESEGMENT_BY_SPEAKER = os.getenv("RESEGMENT_BY_SPEAKER", "false").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+
 # MLX model map: short names → HuggingFace repo IDs for the MLX backend.
 # Sourced from whispermlx.asr.MLX_MODEL_MAP. Duplicated here so that
 # get_canonical_models() and resolve_model_name() work without a
@@ -601,6 +614,12 @@ def diarize(
 
         result = whispermlx.assign_word_speakers(diarize_segments, result, fill_nearest=DIARIZE_FILL_NEAREST)
 
+        # Opt-in: rebuild segments at speaker-change boundaries so rapid turns
+        # are not merged into one speaker's segment (word-level path only; the
+        # coarse path below re-splits along diarization turns regardless).
+        if RESEGMENT_BY_SPEAKER:
+            result = resegment_by_speaker(result)
+
         # Re-split coarse segments along diarization turn boundaries when
         # no segment has word-level data (word_timestamps=false path).
         # This fixes the case where assign_word_speakers collapses multi-speaker
@@ -753,6 +772,106 @@ def _resplit_segments_on_diarization_turns(result: dict, diarize_segments) -> di
             new_segments.append(sub_seg)
 
     result["segments"] = new_segments
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Segment resegmentation by speaker (opt-in, word_timestamps=true path)
+# ---------------------------------------------------------------------------
+
+
+def _is_cjk(text: str) -> bool:
+    return any("一" <= ch <= "鿿" for ch in text)
+
+
+def _join_words(words: list[dict]) -> str:
+    out = ""
+    for w in words:
+        token = w["word"]
+        if out and not _is_cjk(token) and not _is_cjk(out[-1]):
+            out += " "
+        out += token
+    return out
+
+
+def _words_to_segments(
+    words: list[dict], max_gap: float = 1.0, max_len: float = 30.0
+) -> list[dict]:
+    """Group aligned words into segments, splitting on speaker changes
+    (when words carry a speaker label), silence gaps, sentence-ending
+    punctuation, or excessive segment length."""
+    segments: list[dict] = []
+    current: list[dict] = []
+    current_speaker = None
+    last_timed = None
+    first_timed = None
+    for w in words:
+        speaker = w.get("speaker")
+        timed = "start" in w and "end" in w
+        # Words without timestamps (wav2vec2 skips some tokens) ride along
+        # in the current segment; they cannot trigger boundary decisions.
+        if current and timed and last_timed is not None:
+            gap = w["start"] - last_timed["end"]
+            duration = w["end"] - first_timed["start"]
+            ended = current[-1]["word"].rstrip()[-1:] in ".。!?！？"
+            turn = (
+                speaker is not None
+                and current_speaker is not None
+                and speaker != current_speaker
+            )
+            if turn or gap > max_gap or duration > max_len or (ended and gap > 0.2):
+                segments.append(current)
+                current = []
+                current_speaker = None
+                first_timed = None
+        current.append(w)
+        if timed:
+            last_timed = w
+            if first_timed is None:
+                first_timed = w
+        if speaker is not None:
+            current_speaker = speaker
+    if current:
+        segments.append(current)
+
+    out = []
+    for seg in segments:
+        timed = [w for w in seg if "start" in w and "end" in w]
+        if not timed:
+            # No usable timestamps at all: append the text to the previous
+            # segment rather than inventing a zero-length one.
+            if out:
+                out[-1]["text"] = _join_words([{"word": out[-1]["text"]}] + seg)
+                out[-1]["words"] = out[-1]["words"] + seg
+            continue
+        entry = {
+            "start": timed[0]["start"],
+            "end": timed[-1]["end"],
+            "text": _join_words(seg),
+            "words": seg,
+        }
+        speakers = [w["speaker"] for w in seg if w.get("speaker")]
+        if speakers:
+            entry["speaker"] = max(set(speakers), key=speakers.count)
+        out.append(entry)
+    return out
+
+
+def resegment_by_speaker(result: dict) -> dict:
+    """Rebuild segments after diarization so each segment holds a single
+    speaker's turn. With word-level timestamps, a coarse aligned segment can
+    span several speakers' turns while its words carry per-word speaker
+    labels; this regroups the words at speaker-change boundaries.
+
+    Words are collected from the segments, NOT from result["word_segments"]:
+    assign_word_speakers labels the segment word dicts in place, and
+    word_segments can be a separate unlabeled copy.
+    """
+    words = [w for seg in result.get("segments", []) for w in seg.get("words", [])]
+    if not any("start" in w and "end" in w for w in words):
+        return result
+    result["segments"] = _words_to_segments(words)
+    result["word_segments"] = [w for w in words if "start" in w and "end" in w]
     return result
 
 

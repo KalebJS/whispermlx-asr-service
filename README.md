@@ -289,6 +289,7 @@ When speakers are merged into a single label, or short back-and-forth turns are 
 | `DIARIZE_MIN_DURATION_OFF` | Non-speech gaps shorter than this (seconds) are filled, merging the turns on either side. Raise it to suppress over-segmentation. It does not recover rapid turns, since the default is already `0.0`. | `0.0`-`0.5` (default `0.0`) |
 | `DIARIZE_PARAM_OVERRIDES` | Escape hatch: a JSON object deep-merged into the pipeline's instantiated parameters, for any key the variables above do not cover (for example `clustering.Fa`, `clustering.Fb`). | `{"clustering": {"Fb": 1.0}}` |
 | `DIARIZE_FILL_NEAREST` | Assign the nearest speaker to words/segments that fall outside every diarization turn, instead of leaving them untagged. Fixes "orphan" segments such as a closing line with no speaker label. | `false` (default), `true` |
+| `RESEGMENT_BY_SPEAKER` | Rebuild segments at speaker-change boundaries after diarization using per-word speaker labels, so rapid turns are not merged into one speaker's segment. Changes the segment shape, so it is opt-in. The `word_timestamps=false` path already re-splits along diarization turns unconditionally. | `false` (default), `true` |
 
 ```bash
 # Split merged speakers (the most common fix); tag any orphan segments
