@@ -82,7 +82,7 @@ This project maintains API compatibility with the original [whisper-asr-webservi
 4. **v0.3.2:** Docker image variants (Pascal/Blackwell), real Prometheus `/metrics`, idle model eviction, OpenAI-style model aliases.
 5. **v0.4.0 (current):** Major pivot. Swapped the inference engine from `faster-whisper`/CUDA to `whispermlx` (MLX) for native Apple Silicon. Removed Docker, Ray Serve, and all CUDA dependencies entirely. Now runs as a single-process uvicorn server with an async queue. Port changed from 9000 to 9001. `COMPUTE_TYPE` and `BATCH_SIZE` became no-ops (kept for API compatibility). `distil-*` models removed; model list sourced from the whispermlx MLX model map.
 
-When working on this codebase, keep in mind that `COMPUTE_TYPE`, `BATCH_SIZE`, and `hotwords` are accepted but inert on the MLX backend. The `DEVICE` env var only controls torch-based stages (VAD, alignment, diarization); MLX Whisper ASR always runs on the Metal GPU.
+When working on this codebase, keep in mind that `COMPUTE_TYPE`, `BATCH_SIZE`, and `hotwords` are accepted but inert on the MLX backend. The `DEVICE` env var only controls torch-based stages (VAD, alignment, diarization); MLX Whisper ASR always runs on the Metal GPU. The optional `ALIGN_DEVICE` env var overrides the device for the Wav2Vec2 alignment stage only (defaults to `DEVICE`).
 
 ## Security & Configuration
 

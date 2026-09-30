@@ -31,6 +31,10 @@ logger = logging.getLogger(__name__)
 # Configuration (read once at import time, same as before)
 # ---------------------------------------------------------------------------
 DEVICE = os.getenv("DEVICE", "mps")
+# Device for the Wav2Vec2 alignment stage. Defaults to DEVICE; set
+# ALIGN_DEVICE=cpu to keep alignment off the Metal GPU at the cost of slower
+# word timestamps (upstream issue #32).
+ALIGN_DEVICE = os.getenv("ALIGN_DEVICE", "").strip().lower() or DEVICE
 # COMPUTE_TYPE and BATCH_SIZE are accepted for API compatibility with the
 # original CUDA-based service but are INERT under the MLX backend.  Setting
 # them will not error, but they have no effect on inference behaviour.
@@ -291,10 +295,10 @@ def load_align_model(language_code: str):
     if language_code not in _align_models:
         with _model_load_lock:
             if language_code not in _align_models:
-                logger.info(f"Loading alignment model for language: {language_code}")
+                logger.info(f"Loading alignment model for language: {language_code} on {ALIGN_DEVICE}")
                 model_a, metadata = whispermlx.load_align_model(
                     language_code=language_code,
-                    device=DEVICE,
+                    device=ALIGN_DEVICE,
                     model_dir=CACHE_DIR,
                 )
                 _align_models[language_code] = (model_a, metadata)
@@ -388,7 +392,7 @@ def align(audio: np.ndarray, result: dict) -> dict:
             model_a,
             metadata,
             audio,
-            DEVICE,
+            ALIGN_DEVICE,
             return_char_alignments=False,
         )
         with _model_load_lock:

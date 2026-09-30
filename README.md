@@ -393,6 +393,11 @@ Edit `.env` to customize:
 # MLX Whisper ASR always runs on the Metal GPU regardless of this setting.
 DEVICE=mps              # mps (default, recommended) or cpu (fallback, slower diarization)
 
+# Alignment stage device (defaults to DEVICE). cpu keeps the Wav2Vec2
+# alignment model off the Metal GPU to reduce memory pressure, at the cost
+# of slower word timestamps.
+#ALIGN_DEVICE=cpu
+
 # Compute type and batch size (accepted but INERT under MLX — no effect on inference)
 # Code defaults: COMPUTE_TYPE=int8, BATCH_SIZE=2 (leftover from CUDA era, unused)
 #COMPUTE_TYPE=int8
