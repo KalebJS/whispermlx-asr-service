@@ -279,6 +279,38 @@ curl -X POST http://localhost:9001/asr \
 
 Returns a `speaker_embeddings` object keyed by speaker label, with one numeric vector per detected speaker. Embeddings are only included in `json` output format.
 
+#### Tuning Diarization Hyperparameters
+
+When speakers are merged into a single label, or short back-and-forth turns are missed, the pyannote community-1 pipeline can be tuned through environment variables. These are unset by default, so the service runs with the model's published defaults unless you opt in. The pipeline's full default parameter schema is logged at startup; for community-1 it is `{'segmentation': {'min_duration_off': 0.0}, 'clustering': {'threshold': 0.6, 'Fa': 0.07, 'Fb': 0.8}}`.
+
+| Variable | Effect | Typical values |
+|----------|--------|----------------|
+| `DIARIZE_CLUSTERING_THRESHOLD` | The main lever for merged speakers. Lower it to split similar or merged voices more aggressively; raise it for fewer speakers. | `0.4`-`0.8` (default `0.6`; lower = more speakers) |
+| `DIARIZE_MIN_DURATION_OFF` | Non-speech gaps shorter than this (seconds) are filled, merging the turns on either side. Raise it to suppress over-segmentation. It does not recover rapid turns, since the default is already `0.0`. | `0.0`-`0.5` (default `0.0`) |
+| `DIARIZE_PARAM_OVERRIDES` | Escape hatch: a JSON object deep-merged into the pipeline's instantiated parameters, for any key the variables above do not cover (for example `clustering.Fa`, `clustering.Fb`). | `{"clustering": {"Fb": 1.0}}` |
+| `DIARIZE_FILL_NEAREST` | Assign the nearest speaker to words/segments that fall outside every diarization turn, instead of leaving them untagged. Fixes "orphan" segments such as a closing line with no speaker label. | `false` (default), `true` |
+
+```bash
+# Split merged speakers (the most common fix); tag any orphan segments
+DIARIZE_CLUSTERING_THRESHOLD=0.5
+DIARIZE_FILL_NEAREST=true
+```
+
+These are global settings applied when the pipeline loads. Invalid or unrecognised keys are logged and ignored rather than failing diarization, so the pipeline always falls back to defaults if an override cannot be applied. To find the best value for your audio without restarting the service, use the sweep script described below.
+
+#### Sweeping Parameters on Your Own Audio
+
+`tests/diarize_sweep.py` runs diarization on one file across several settings and reports, per config, the number of speakers, turns, and a turn timeline, so you can see which value recovers your missing turns. It isolates the diarizer (no transcription), so it is fast. Run it directly against your models and cache:
+
+```bash
+./entrypoint.sh &   # or export HF_TOKEN yourself
+uv run python tests/diarize_sweep.py testfiles/your_audio.mp3 --min-speakers 2
+```
+
+Pass `--grid "none:none,0.5:0.0,0.45:0.0"` for a custom set of `threshold:min_duration_off` pairs, and `--num-speakers` / `--min-speakers` / `--max-speakers` when the count is known.
+
+For audio that mixes languages within a single file, also consider passing an explicit `language` per request: Whispermlx loads one alignment model for the detected language, and poor word-level timestamps from a mismatched alignment model are a common cause of merged or missing speaker turns. Diarization quality is also inherently limited when voices are very similar (for example synthetic or dubbed dialogue).
+
 ### OpenAI-Compatible Endpoints
 
 The service provides drop-in OpenAI API compatibility:

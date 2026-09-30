@@ -555,10 +555,11 @@ class TestAssignWordSpeakers:
         with (
             patch.object(pipeline, "load_diarize_pipeline", return_value=mock_diarize_model),
             patch.object(pipeline.whispermlx, "assign_word_speakers", return_value=result) as mock_assign,
+            patch.object(pipeline, "DIARIZE_FILL_NEAREST", False),
         ):
             pipeline.diarize(audio, result)
 
-        mock_assign.assert_called_once_with(mock_diarize_segments, result)
+        mock_assign.assert_called_once_with(mock_diarize_segments, result, fill_nearest=False)
 
     def test_assign_word_speakers_result_returned(self):
         """The result from assign_word_speakers is returned as the diarized result."""

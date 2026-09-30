@@ -52,7 +52,7 @@ def _make_whispermlx_mock():
     }
     # Return a real numpy array so diarization code paths don't crash
     mock_module.load_audio.return_value = np.zeros(16000, dtype=np.float32)
-    mock_module.assign_word_speakers.side_effect = lambda diar, result: result
+    mock_module.assign_word_speakers.side_effect = lambda diar, result, **kwargs: result
     return mock_module
 
 

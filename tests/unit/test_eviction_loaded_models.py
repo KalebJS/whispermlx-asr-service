@@ -55,7 +55,7 @@ def _make_whispermlx_mock():
         "word_segments": [{"word": "hello", "start": 0.0, "end": 0.5}],
     }
     mock_module.load_audio.return_value = np.zeros(16000, dtype=np.float32)
-    mock_module.assign_word_speakers.side_effect = lambda diar, result: result
+    mock_module.assign_word_speakers.side_effect = lambda diar, result, **kwargs: result
     return mock_module
 
 

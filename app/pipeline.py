@@ -7,7 +7,9 @@ Powered by whispermlx (MLX backend on Apple Silicon).
 """
 
 import contextlib
+import copy
 import gc
+import json
 import logging
 import math
 import os
@@ -57,6 +59,50 @@ DEFAULT_MODEL = os.getenv("PRELOAD_MODEL", "large-v3")
 # tight loops.
 MODEL_KEEP_ALIVE_SECONDS = int(os.getenv("MODEL_KEEP_ALIVE_SECONDS", "0"))
 MODEL_EVICTION_INTERVAL_SECONDS = max(30, int(os.getenv("MODEL_EVICTION_INTERVAL_SECONDS", "60")))
+
+# Diarization hyperparameter tuning (pyannote community-1).
+# All unset by default -> the pipeline runs with the model's published defaults,
+# so behaviour is unchanged unless you opt in.
+#
+#   DIARIZE_CLUSTERING_THRESHOLD: the main lever for merged/missed speakers.
+#       community-1 default is 0.6. Lower it (e.g. 0.5) to split voices more
+#       aggressively when distinct speakers share one label; raise it to merge
+#       more (fewer phantom speakers). Useful range ~0.4-0.8.
+#   DIARIZE_MIN_DURATION_OFF: non-speech gaps shorter than this (seconds) are
+#       filled, MERGING the turns on either side. community-1 default is 0.0.
+#       RAISE it (e.g. 0.1-0.5) to suppress over-segmentation; lowering below
+#       0.0 is not possible, so it does not help recover rapid turns -- use the
+#       clustering threshold for that.
+#   DIARIZE_PARAM_OVERRIDES: escape hatch -- a JSON object deep-merged into the
+#       pipeline's instantiated parameters, for any key the two vars above don't
+#       cover. The exact schema is logged at pipeline load (see logs).
+def _env_or_none(name: str) -> str | None:
+    """Read an env var, treating unset OR empty/whitespace as None.
+
+    .env loaders may forward optional vars as empty strings, in which case a
+    plain os.getenv() would return "" and downstream float() would crash.
+    Normalize that to None here.
+    """
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return None
+    return value.strip()
+
+
+DIARIZE_CLUSTERING_THRESHOLD = _env_or_none("DIARIZE_CLUSTERING_THRESHOLD")
+DIARIZE_MIN_DURATION_OFF = _env_or_none("DIARIZE_MIN_DURATION_OFF")
+DIARIZE_PARAM_OVERRIDES = _env_or_none("DIARIZE_PARAM_OVERRIDES")
+
+# When True, words/segments that fall outside every diarization turn are assigned
+# the *nearest* speaker instead of being left unlabeled. Fixes "orphan" segments
+# (e.g. a closing line with no speaker tag) at the cost of occasionally labeling
+# a long silence. Default False preserves the prior behaviour.
+DIARIZE_FILL_NEAREST = os.getenv("DIARIZE_FILL_NEAREST", "false").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
 
 # MLX model map: short names → HuggingFace repo IDs for the MLX backend.
 # Sourced from whispermlx.asr.MLX_MODEL_MAP. Duplicated here so that
@@ -309,6 +355,99 @@ def load_align_model(language_code: str):
     return _align_models[language_code]
 
 
+def _deep_merge(base: dict, overrides: dict) -> dict:
+    """Recursively merge `overrides` into `base` in place."""
+    for key, value in overrides.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _deep_merge(base[key], value)
+        else:
+            base[key] = value
+    return base
+
+
+def _set_scoped(params: dict, section: str, key: str, value: float) -> bool:
+    """Set params[section][key]=value only if that exact path already exists."""
+    sec = params.get(section)
+    if isinstance(sec, dict) and key in sec:
+        sec[key] = value
+        return True
+    return False
+
+
+def _apply_diarize_tuning(pipeline_wrapper: DiarizationPipeline) -> None:
+    """
+    Apply env-configured hyperparameter overrides to the underlying pyannote
+    pipeline. No-op unless at least one DIARIZE_* tuning var is set.
+
+    Reads the pipeline's *actual* instantiated parameters and merges overrides
+    into them, so this stays correct regardless of community-1's internal
+    parameter schema. Any failure is logged and swallowed -- diarization then
+    runs with published defaults rather than breaking.
+    """
+    if not any([DIARIZE_CLUSTERING_THRESHOLD, DIARIZE_MIN_DURATION_OFF, DIARIZE_PARAM_OVERRIDES]):
+        return
+
+    pyannote_pipeline = getattr(pipeline_wrapper, "model", None)
+    if pyannote_pipeline is None:
+        logger.warning("Diarization tuning requested but underlying pyannote pipeline not accessible; using defaults")
+        return
+
+    try:
+        current = pyannote_pipeline.parameters(instantiated=True)
+        params = copy.deepcopy(dict(current))
+    except Exception as e:
+        logger.warning(f"Could not read diarization pipeline parameters for tuning ({e}); using defaults")
+        return
+
+    logger.info(f"Diarization default hyperparameters: {params}")
+
+    applied = []
+    if DIARIZE_CLUSTERING_THRESHOLD is not None:
+        try:
+            val = float(DIARIZE_CLUSTERING_THRESHOLD)
+        except ValueError:
+            logger.warning(f"DIARIZE_CLUSTERING_THRESHOLD={DIARIZE_CLUSTERING_THRESHOLD!r} is not a number; ignoring")
+        else:
+            if _set_scoped(params, "clustering", "threshold", val):
+                applied.append(f"clustering.threshold={val}")
+            else:
+                logger.warning(
+                    "DIARIZE_CLUSTERING_THRESHOLD set but no clustering.threshold in pipeline "
+                    "params (see logged schema above); ignoring"
+                )
+    if DIARIZE_MIN_DURATION_OFF is not None:
+        try:
+            val = float(DIARIZE_MIN_DURATION_OFF)
+        except ValueError:
+            logger.warning(f"DIARIZE_MIN_DURATION_OFF={DIARIZE_MIN_DURATION_OFF!r} is not a number; ignoring")
+        else:
+            if _set_scoped(params, "segmentation", "min_duration_off", val):
+                applied.append(f"segmentation.min_duration_off={val}")
+            else:
+                logger.warning(
+                    "DIARIZE_MIN_DURATION_OFF set but no segmentation.min_duration_off in pipeline "
+                    "params (see logged schema above); ignoring"
+                )
+    if DIARIZE_PARAM_OVERRIDES:
+        try:
+            overrides = json.loads(DIARIZE_PARAM_OVERRIDES)
+            if not isinstance(overrides, dict):
+                raise ValueError("DIARIZE_PARAM_OVERRIDES must be a JSON object")
+            _deep_merge(params, overrides)
+            applied.append(f"json_overrides={overrides}")
+        except Exception as e:
+            logger.warning(f"DIARIZE_PARAM_OVERRIDES could not be applied ({e}); ignoring")
+
+    if not applied:
+        return
+
+    try:
+        pyannote_pipeline.instantiate(params)
+        logger.info(f"Applied diarization hyperparameter overrides: {', '.join(applied)}")
+    except Exception as e:
+        logger.warning(f"Failed to apply diarization hyperparameter overrides ({e}); using defaults")
+
+
 def load_diarize_pipeline() -> DiarizationPipeline:
     """Load diarization pipeline (singleton, thread-safe)."""
     global _diarize_pipeline, _diarize_last_used
@@ -316,11 +455,13 @@ def load_diarize_pipeline() -> DiarizationPipeline:
         with _model_load_lock:
             if _diarize_pipeline is None:
                 logger.info("Loading diarization pipeline: pyannote/speaker-diarization-community-1")
-                _diarize_pipeline = DiarizationPipeline(
+                pipeline = DiarizationPipeline(
                     model_name="pyannote/speaker-diarization-community-1",
                     token=HF_TOKEN,
                     device=DEVICE,
                 )
+                _apply_diarize_tuning(pipeline)
+                _diarize_pipeline = pipeline
                 logger.info("Diarization pipeline loaded")
     with _model_load_lock:
         _diarize_last_used = time.time()
@@ -458,7 +599,7 @@ def diarize(
             diarize_segments = diarize_segments.exclusive_speaker_diarization
             logger.info("Using exclusive speaker diarization for better timestamp reconciliation")
 
-        result = whispermlx.assign_word_speakers(diarize_segments, result)
+        result = whispermlx.assign_word_speakers(diarize_segments, result, fill_nearest=DIARIZE_FILL_NEAREST)
 
         # Re-split coarse segments along diarization turn boundaries when
         # no segment has word-level data (word_timestamps=false path).
