@@ -171,6 +171,46 @@ class TestTranscribeEndpoint:
         assert raised
 
 
+class TestAlignerSelection:
+    def test_auto_keeps_wav2vec2_for_timestamped(self):
+        resp = MagicMock(
+            status_code=200,
+            raise_for_status=lambda: None,
+            json=lambda: {
+                "language": "english",
+                "segments": [{"start": 0.0, "end": 1.0, "text": "hello"}],
+            },
+        )
+        with (
+            patch.object(external, "BASE_URL", "https://api.example.com/v1"),
+            patch.object(external, "MODEL", "whisper-1"),
+            patch.object(external, "ALIGNER", "auto"),
+            patch.object(external.requests, "post", return_value=resp),
+        ):
+            result = external.transcribe(make_audio(1.0), language="en")
+        assert "_qwen_align" not in result
+
+    def test_qwen_forced_for_timestamped(self):
+        """EXTERNAL_ASR_ALIGNER=qwen tags timestamped responses for the forced aligner."""
+        resp = MagicMock(
+            status_code=200,
+            raise_for_status=lambda: None,
+            json=lambda: {
+                "language": "english",
+                "segments": [{"start": 0.0, "end": 1.0, "text": "hello"}],
+            },
+        )
+        with (
+            patch.object(external, "BASE_URL", "https://api.example.com/v1"),
+            patch.object(external, "MODEL", "whisper-1"),
+            patch.object(external, "ALIGNER", "qwen"),
+            patch.object(external.requests, "post", return_value=resp),
+        ):
+            result = external.transcribe(make_audio(1.0), language="en")
+        assert result["_qwen_align"] is True
+        assert result["_language_name"] == "English"
+
+
 class TestTranscribeChat:
     def test_chat_chunks_and_strips_empties(self):
         resp = MagicMock(

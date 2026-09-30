@@ -290,6 +290,8 @@ EXTERNAL_ASR_MODEL=whisper-1
 
 How word timestamps are produced depends on the provider response. Providers that return timestamped segments (whisper-1 `verbose_json`, Groq, self-hosted Whisper servers) feed the existing Wav2Vec2 alignment stage directly. Text-only providers (gpt-4o-transcribe, Voxtral or other audio models through OpenRouter's chat API, VibeVoice via vLLM) are word-timestamped by the Qwen forced aligner instead, which downloads on first use (~1.2 GB) and adds about 1 GB of VRAM. `task=translate` falls back to the whisper backend, and the requested Whisper model name is ignored.
 
+Set `EXTERNAL_ASR_ALIGNER=qwen` to force the Qwen forced aligner even for timestamped responses; it is language-agnostic across its supported set and handles code-switched audio, unlike the per-language Wav2Vec2 models. The reverse is not configurable: Wav2Vec2 requires segment timestamps, so text-only responses always use the Qwen aligner.
+
 ### Speaker Diarization
 
 Speaker diarization assigns `SPEAKER_NN` labels to segments and words. It is enabled by default when `HF_TOKEN` is set.

@@ -46,6 +46,13 @@ MODEL = _env("EXTERNAL_ASR_MODEL")
 MODE = _env("EXTERNAL_ASR_MODE", "transcriptions").lower()
 CHUNK_SECONDS = int(_env("EXTERNAL_ASR_CHUNK_SECONDS", "300") or "300")
 TIMEOUT_SECONDS = int(_env("EXTERNAL_ASR_TIMEOUT_SECONDS", "600") or "600")
+# Aligner selection. "auto" (default) uses Wav2Vec2 when the provider
+# returns timestamped segments and the Qwen forced aligner otherwise.
+# "qwen" forces the Qwen aligner even for timestamped responses, which is
+# language-agnostic across its supported set and handles code-switched
+# audio; the reverse (Wav2Vec2 for text-only responses) is not possible
+# because Wav2Vec2 needs segment timestamps as anchors.
+ALIGNER = _env("EXTERNAL_ASR_ALIGNER", "auto").lower()
 
 CHAT_INSTRUCTION = (
     "Transcribe this audio verbatim in its original spoken language, with punctuation. Output only the transcription."
@@ -159,7 +166,7 @@ def _transcribe_endpoint(audio: np.ndarray, language: str | None, context: str |
     )
 
     if timestamped:
-        return {
+        result = {
             "segments": [
                 {
                     "start": float(s["start"]),
@@ -172,6 +179,10 @@ def _transcribe_endpoint(audio: np.ndarray, language: str | None, context: str |
             "language": detected or "en",
             "_asr_backend": "external",
         }
+        if ALIGNER == "qwen":
+            result["_qwen_align"] = True
+            _stash_language_name(result, detected or language)
+        return result
 
     # Text-only response: one chunk-span segment, timestamps come from the
     # Qwen forced aligner downstream.
