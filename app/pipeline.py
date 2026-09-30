@@ -6,6 +6,7 @@ reusable functions consumed by the FastAPI endpoints.
 Powered by whispermlx (MLX backend on Apple Silicon).
 """
 
+import contextlib
 import gc
 import logging
 import math
@@ -13,6 +14,7 @@ import os
 import threading
 import time
 import warnings
+from pathlib import Path
 from typing import Any
 
 # Suppress pyannote's torchcodec warning -- we decode audio via whispermlx.load_audio (ffmpeg),
@@ -35,7 +37,14 @@ DEVICE = os.getenv("DEVICE", "mps")
 COMPUTE_TYPE = os.getenv("COMPUTE_TYPE", "int8")
 BATCH_SIZE = int(os.getenv("BATCH_SIZE", "2"))
 HF_TOKEN = os.getenv("HF_TOKEN", None)
-CACHE_DIR = os.getenv("CACHE_DIR", os.path.expanduser("~/.cache/whisperx-asr"))
+# python-dotenv (used by uvicorn --env-file) does not expand ~ in env values,
+# so we must expand it ourselves for an env-provided CACHE_DIR.  Without this
+# the literal "~/.cache/whisperx-asr" is passed to torch.hub / HuggingFace as
+# a CWD-relative directory literally named "~", causing the alignment model to
+# re-download every run and never be detected.
+CACHE_DIR = Path(os.getenv("CACHE_DIR", "~/.cache/whisperx-asr")).expanduser()
+with contextlib.suppress(OSError):
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
 DEFAULT_MODEL = os.getenv("PRELOAD_MODEL", "large-v3")
 
 # Idle model eviction. Set MODEL_KEEP_ALIVE_SECONDS > 0 to unload Whisper
