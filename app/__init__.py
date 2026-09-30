@@ -1,3 +1,3 @@
 """Whispermlx ASR API Service"""
 
-__version__ = "0.4.0"
+from app.version import __version__ as __version__  # explicit re-export

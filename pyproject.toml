@@ -94,6 +94,7 @@ name = "cz_conventional_commits"
 tag_format = "v$version"
 version_scheme = "semver"
 version_provider = "pep621"
+version_files = ["app/version.py"]
 update_changelog_on_bump = true
 
 [tool.pytest.ini_options]
