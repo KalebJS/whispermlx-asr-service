@@ -22,6 +22,7 @@ import logging
 import os
 import threading
 import time
+from functools import lru_cache
 
 import numpy as np
 import torch
@@ -58,6 +59,36 @@ def _env_or_default(name: str, default: str) -> str:
 
 ASR_MODEL_ID = _env_or_default("QWEN3_ASR_MODEL", "Qwen/Qwen3-ASR-1.7B-hf")
 ALIGNER_MODEL_ID = _env_or_default("QWEN3_ALIGNER_MODEL", "Qwen/Qwen3-ForcedAligner-0.6B-hf")
+
+# Execution runtime selection for this backend:
+#   auto (default) -> native MLX (via mlx-qwen3-asr, always Metal) when the
+#       package is installed and there is no CUDA device (i.e. Apple
+#       Silicon, where MLX's fp16 Metal path beats torch MPS); torch otherwise.
+#   mlx  -> require the MLX runtime (error at load if missing).
+#   torch-> stock transformers (upstream parity; required for float16 CUDA).
+# See app/qwen3_mlx_runtime.py for the MLX implementation.
+RUNTIME = _env_or_default("QWEN3_RUNTIME", "auto").lower()
+
+
+@lru_cache(maxsize=1)
+def _mlx_package_available() -> bool:
+    try:
+        import mlx_qwen3_asr  # noqa: F401
+
+        return True
+    except Exception as e:
+        logger.info(f"mlx_qwen3_asr not available: {e}")
+        return False
+
+
+def _use_mlx_runtime() -> bool:
+    if RUNTIME == "mlx":
+        return True
+    if RUNTIME == "torch":
+        return False
+    # auto: torch on CUDA (upstream parity, fp16), MLX otherwise.
+    return not torch.cuda.is_available() and _mlx_package_available()
+
 
 # Standing context prepended to every request's system message. Important for
 # code-switched audio: with no language hint and no context, Qwen3-ASR picks
@@ -150,6 +181,11 @@ def transcribe(
 ) -> dict:
     """Transcribe audio in chunks. Returns a whisperx-shaped result dict
     with one segment per chunk (word timestamps come from align())."""
+    if _use_mlx_runtime():
+        from app import qwen3_mlx_runtime
+
+        return qwen3_mlx_runtime.transcribe(audio, language=language, context=context)
+
     processor, model = _load_asr()
 
     # transformers' apply_transcription_request builds the system message
@@ -175,8 +211,7 @@ def transcribe(
         # instead of transcribing). Retry once without the system message.
         if prompt is not None and chunk_s > 60 and len(text) < chunk_s * 0.5:
             logger.warning(
-                f"Qwen3-ASR chunk {start_s:.0f}-{end_s:.0f}s produced only "
-                f"{len(text)} chars; retrying without context"
+                f"Qwen3-ASR chunk {start_s:.0f}-{end_s:.0f}s produced only {len(text)} chars; retrying without context"
             )
             retry_text, retry_lang = _generate(processor, model, chunk, None, lang_name)
             if len(retry_text) > len(text):
@@ -202,9 +237,9 @@ def _generate(
     prompt: str | None,
     lang_name: str | None,
 ) -> tuple[str, str | None]:
-    inputs = processor.apply_transcription_request(
-        audio=chunk, language=lang_name, prompt=prompt
-    ).to(model.device, model.dtype)
+    inputs = processor.apply_transcription_request(audio=chunk, language=lang_name, prompt=prompt).to(
+        model.device, model.dtype
+    )
     max_new = min(
         MAX_NEW_TOKENS,
         int(len(chunk) / SAMPLE_RATE * TOKENS_PER_SECOND_CAP) + 128,
@@ -221,7 +256,16 @@ _PUNCT = ".,!?;:)\"'。！？，、；：”'"
 
 def align(audio: np.ndarray, result: dict) -> dict:
     """Run the Qwen3 forced aligner over each transcribed chunk and
-    rebuild segments from word timestamps."""
+    rebuild segments from word timestamps.
+
+    Under the MLX runtime, results from transcribe() already carry word
+    timestamps and pass through unchanged; text-only results (e.g. from
+    the external backend) use the native MLX forced aligner."""
+    if _use_mlx_runtime():
+        from app import qwen3_mlx_runtime
+
+        return qwen3_mlx_runtime.align(audio, result)
+
     from app.pipeline import _words_to_segments
 
     processor, model = _load_aligner()

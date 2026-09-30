@@ -26,6 +26,7 @@ dependencies = [
     "prometheus-client",
     "numba>=0.60",  # override mlx-whisper's stale numba==0.53.1 pin (incompatible with Python 3.13)
     "transformers>=5.13,<6",
+    "mlx-qwen3-asr>=0.4.4",
 ]
 
 [project.urls]

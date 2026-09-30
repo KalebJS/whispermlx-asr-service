@@ -12,10 +12,26 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import numpy as np
+import pytest
 import torch
 
 import app.pipeline as pipeline
 import app.qwen3_backend as qwen3_backend
+
+# ---------------------------------------------------------------------------
+# Force the torch execution runtime for this module
+# ---------------------------------------------------------------------------
+# ASR_BACKEND=qwen3 defaults to auto runtime selection, which prefers the MLX
+# runtime (mlx_qwen3_asr) on non-CUDA machines where it is installed. These
+# tests exercise the torch/transformers path specifically, so pin it.
+# Runtime-specific tests live in test_qwen3_mlx_runtime.py.
+
+
+@pytest.fixture(autouse=True)
+def _force_torch_runtime():
+    with patch.object(qwen3_backend, "RUNTIME", "torch"):
+        yield
+
 
 # ---------------------------------------------------------------------------
 # Fake processor inputs

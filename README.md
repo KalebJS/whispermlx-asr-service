@@ -251,25 +251,33 @@ curl -X POST "http://localhost:9001/asr?language=en&initial_prompt=Speakr+is+a+t
 
 ### Experimental: Qwen3-ASR Backend
 
-`ASR_BACKEND=qwen3` transcribes with [Qwen3-ASR](https://huggingface.co/Qwen/Qwen3-ASR-1.7B-hf) and produces word timestamps with the language-agnostic [Qwen3 forced aligner](https://huggingface.co/Qwen/Qwen3-ForcedAligner-0.6B-hf) — both via stock `transformers` (`>= 5.13`, pinned as a dependency). Model weights (~4.6 GB) download lazily into the HF cache like every other model in this service.
+`ASR_BACKEND=qwen3` transcribes with [Qwen3-ASR](https://huggingface.co/Qwen/Qwen3-ASR-1.7B-hf) and produces word timestamps with the language-agnostic [Qwen3 forced aligner](https://huggingface.co/Qwen/Qwen3-ForcedAligner-0.6B-hf). On Apple Silicon it runs natively in MLX (see the execution-runtime table below); on CUDA machines it runs via stock `transformers` (`>= 5.13`). Model weights download lazily into the HF cache like every other model in this service.
 
 **Why opt in:** the aligner is language-agnostic across its supported set, so code-switched audio (e.g. Chinese/English in one file) gets word-level timestamps without a per-language Wav2Vec2 model. Segment-level speaker-turn resegmentation is always applied for this backend.
 
 **Trade-offs vs the default whisper (whispermlx) backend:**
 
-- The requested Whisper model name is ignored (`QWEN3_ASR_MODEL` selects the checkpoint, default `Qwen/Qwen3-ASR-1.7B-hf`).
+- The requested Whisper model name is ignored (`QWEN3_ASR_MODEL` selects the checkpoint).
 - `task=translate` is not supported; such requests transparently fall back to the whisper backend.
 - `hotwords` and `initial_prompt` act as free-text context biasing in the system message.
-- Runs on `cuda`, `mps`, or `cpu` (`DEVICE` env, float32 outside cuda); first use downloads the checkpoints, then they are cached.
+- First use downloads the checkpoints, then they are cached.
 
-**Configuration (all optional):**
+**Execution runtime:** `QWEN3_RUNTIME` selects how the backend runs:
+
+| Runtime | Stack | Device | Default when |
+|---|---|---|---|
+| `auto` (default) | best available | Metal GPU | on Apple Silicon without CUDA: native MLX; torch elsewhere |
+| `mlx` | [`mlx-qwen3-asr`](https://pypi.org/project/mlx-qwen3-asr/) | MLX / Metal, fp16, one pass with word timestamps | Mac-first: chunks at pauses, ~2.6× faster forced aligner than PyTorch |
+| `torch` | stock `transformers` | `cuda`/`mps`/`cpu` per `DEVICE` | CUDA machines (float16); otherwise float32 |
+
+The MLX runtime accepts the official `Qwen/Qwen3-ASR-1.7B` + `Qwen/Qwen3-ForcedAligner-0.6B` repos (weights converted on first load) plus the quantized `mlx-community/Qwen3-ASR-*` / `moona3k/mlx-qwen3-asr-*` checkpoints — 8-bit is lossless vs fp16 and ~1.3× faster, 4-bit ~1.7× faster:
 
 ```bash
 # .env
 ASR_BACKEND=qwen3
-# QWEN3_ASR_MODEL=Qwen/Qwen3-ASR-1.7B-hf
-# QWEN3_ALIGNER_MODEL=Qwen/Qwen3-ForcedAligner-0.6B-hf
-# QWEN3_CHUNK_SECONDS=90
+QWEN3_RUNTIME=mlx
+QWEN3_ASR_MODEL=moona3k/mlx-qwen3-asr-1.7b-8bit   # ~2.0 GB, lossless vs fp16
+# QWEN3_ALIGNER_MODEL=Qwen/Qwen3-ForcedAligner-0.6B
 # QWEN3_DEFAULT_CONTEXT=        # standing context biasing for every request
 ```
 
