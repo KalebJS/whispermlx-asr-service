@@ -232,7 +232,10 @@ class TestNoTorchCudaInMetrics:
         Excludes serve_app.py / serve_deployments.py which are dead Ray
         modules removed by a separate feature."""
         app_dir = Path(__file__).resolve().parents[2] / "app"
-        excluded = {"serve_app.py", "serve_deployments.py"}
+        # serve_app.py / serve_deployments.py are dead Ray modules removed by a
+        # separate feature. qwen3_backend.py is an optional torch-native backend
+        # (transformers) that legitimately detects cuda/mps/cpu devices.
+        excluded = {"serve_app.py", "serve_deployments.py", "qwen3_backend.py"}
         for py_file in app_dir.glob("*.py"):
             if py_file.name in excluded:
                 continue

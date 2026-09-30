@@ -247,6 +247,34 @@ curl -X POST "http://localhost:9001/asr?language=en&initial_prompt=Speakr+is+a+t
   -F "audio_file=@meeting.mp3"
 ```
 
+> Note: on the optional Qwen3 backend (`ASR_BACKEND=qwen3`), `hotwords` and `initial_prompt` are *not* no-ops — they are forwarded as free-text context biasing to the model. See [Experimental: Qwen3-ASR Backend](#experimental-qwen3-asr-backend).
+
+### Experimental: Qwen3-ASR Backend
+
+`ASR_BACKEND=qwen3` transcribes with [Qwen3-ASR](https://huggingface.co/Qwen/Qwen3-ASR-1.7B-hf) and produces word timestamps with the language-agnostic [Qwen3 forced aligner](https://huggingface.co/Qwen/Qwen3-ForcedAligner-0.6B-hf) — both via stock `transformers` (`>= 5.13`, pinned as a dependency). Model weights (~4.6 GB) download lazily into the HF cache like every other model in this service.
+
+**Why opt in:** the aligner is language-agnostic across its supported set, so code-switched audio (e.g. Chinese/English in one file) gets word-level timestamps without a per-language Wav2Vec2 model. Segment-level speaker-turn resegmentation is always applied for this backend.
+
+**Trade-offs vs the default whisper (whispermlx) backend:**
+
+- The requested Whisper model name is ignored (`QWEN3_ASR_MODEL` selects the checkpoint, default `Qwen/Qwen3-ASR-1.7B-hf`).
+- `task=translate` is not supported; such requests transparently fall back to the whisper backend.
+- `hotwords` and `initial_prompt` act as free-text context biasing in the system message.
+- Runs on `cuda`, `mps`, or `cpu` (`DEVICE` env, float32 outside cuda); first use downloads the checkpoints, then they are cached.
+
+**Configuration (all optional):**
+
+```bash
+# .env
+ASR_BACKEND=qwen3
+# QWEN3_ASR_MODEL=Qwen/Qwen3-ASR-1.7B-hf
+# QWEN3_ALIGNER_MODEL=Qwen/Qwen3-ForcedAligner-0.6B-hf
+# QWEN3_CHUNK_SECONDS=90
+# QWEN3_DEFAULT_CONTEXT=        # standing context biasing for every request
+```
+
+`QWEN3_DEFAULT_CONTEXT` is prepended to the system message of every request (same mechanism as per-request `hotwords`). For code-switched audio, pass an explicit `language` per request: without one, the model picks the dominant language per chunk and translates the rest into it.
+
 ### Speaker Diarization
 
 Speaker diarization assigns `SPEAKER_NN` labels to segments and words. It is enabled by default when `HF_TOKEN` is set.
@@ -289,7 +317,7 @@ When speakers are merged into a single label, or short back-and-forth turns are 
 | `DIARIZE_MIN_DURATION_OFF` | Non-speech gaps shorter than this (seconds) are filled, merging the turns on either side. Raise it to suppress over-segmentation. It does not recover rapid turns, since the default is already `0.0`. | `0.0`-`0.5` (default `0.0`) |
 | `DIARIZE_PARAM_OVERRIDES` | Escape hatch: a JSON object deep-merged into the pipeline's instantiated parameters, for any key the variables above do not cover (for example `clustering.Fa`, `clustering.Fb`). | `{"clustering": {"Fb": 1.0}}` |
 | `DIARIZE_FILL_NEAREST` | Assign the nearest speaker to words/segments that fall outside every diarization turn, instead of leaving them untagged. Fixes "orphan" segments such as a closing line with no speaker label. | `false` (default), `true` |
-| `RESEGMENT_BY_SPEAKER` | Rebuild segments at speaker-change boundaries after diarization using per-word speaker labels, so rapid turns are not merged into one speaker's segment. Changes the segment shape, so it is opt-in. The `word_timestamps=false` path already re-splits along diarization turns unconditionally. | `false` (default), `true` |
+| `RESEGMENT_BY_SPEAKER` | Rebuild segments at speaker-change boundaries after diarization using per-word speaker labels, so rapid turns are not merged into one speaker's segment. Changes the segment shape, so it is opt-in (the `word_timestamps=false` path already re-splits along diarization turns unconditionally). Always applied on the qwen3 backend. | `false` (default), `true` |
 
 ```bash
 # Split merged speakers (the most common fix); tag any orphan segments

@@ -109,13 +109,21 @@ DIARIZE_FILL_NEAREST = os.getenv("DIARIZE_FILL_NEAREST", "false").strip().lower(
 # merged into one speaker's segment. Opt-in via env because it changes the
 # segment shape existing users are accustomed to. The word_timestamps=false path
 # already re-splits along diarization turns unconditionally
-# (_resplit_segments_on_diarization_turns).
+# (_resplit_segments_on_diarization_turns). Always applied on the qwen3 backend.
 RESEGMENT_BY_SPEAKER = os.getenv("RESEGMENT_BY_SPEAKER", "false").strip().lower() in (
     "1",
     "true",
     "yes",
     "on",
 )
+
+# ASR backend selection: "whisper" (default) is the whispermlx/MLX path.
+# "qwen3" transcribes with Qwen3-ASR and aligns with the Qwen3 forced aligner
+# (language-agnostic, useful for code-switched audio); it ignores the
+# requested Whisper model name and does not support task=translate.
+# See app/qwen3_backend.py. (Upstream also has "external"; see
+# ASR_BACKEND=external in the README.)
+ASR_BACKEND = (_env_or_none("ASR_BACKEND") or "whisper").lower()
 
 # MLX model map: short names → HuggingFace repo IDs for the MLX backend.
 # Sourced from whispermlx.asr.MLX_MODEL_MAP. Duplicated here so that
@@ -499,6 +507,19 @@ def transcribe(
               A warning is logged; no error is raised.
     initial_prompt: set per-request on the shared cached model (reset in finally).
     """
+    # Optional Qwen3-ASR backend (opt-in via ASR_BACKEND=qwen3).
+    if ASR_BACKEND == "qwen3":
+        if task == "transcribe":
+            from app import qwen3_backend
+
+            context = " ".join(p for p in (initial_prompt, hotwords) if p) or None
+            logger.info("Starting transcription (qwen3 backend)...")
+            result = qwen3_backend.transcribe(audio, language=language, context=context)
+            logger.info(f"Transcription complete. Detected language: {result.get('language')}")
+            clear_gpu_memory()
+            return result
+        logger.warning("ASR_BACKEND=qwen3 does not support task=translate; using whisper backend for this request")
+
     whisper_model = load_whisper_model(model_name)
 
     # Hotwords is a no-op: the MLX backend has no hotwords mechanism.
@@ -536,7 +557,20 @@ def transcribe(
 # Stage 2 -- Alignment
 # ---------------------------------------------------------------------------
 def align(audio: np.ndarray, result: dict) -> dict:
-    """Run Wav2Vec2 alignment to get word-level timestamps."""
+    """Run alignment to get word-level timestamps (Wav2Vec2 via whispermlx,
+    or the Qwen3 forced aligner for results produced by the qwen3 backend)."""
+    if result.get("_asr_backend") == "qwen3":
+        from app import qwen3_backend
+
+        logger.info("Aligning timestamps (qwen3 forced aligner)...")
+        try:
+            result = qwen3_backend.align(audio, result)
+            logger.info("Timestamp alignment complete")
+            clear_gpu_memory()
+        except Exception as e:
+            logger.warning(f"Timestamp alignment failed: {e}, continuing without word-level timestamps")
+        return result
+
     detected_language = result.get("language", "en")
     logger.info("Aligning timestamps...")
     try:
@@ -614,11 +648,17 @@ def diarize(
 
         result = whispermlx.assign_word_speakers(diarize_segments, result, fill_nearest=DIARIZE_FILL_NEAREST)
 
-        # Opt-in: rebuild segments at speaker-change boundaries so rapid turns
-        # are not merged into one speaker's segment (word-level path only; the
-        # coarse path below re-splits along diarization turns regardless).
-        if RESEGMENT_BY_SPEAKER:
-            result = resegment_by_speaker(result)
+        # Rebuild segments at speaker-change boundaries. The qwen3 backend's
+        # pre-diarization segments come from silence gaps alone, so a segment
+        # can span several speakers' turns; always rebuilt for that backend.
+        # Opt-in for the whisper backend via RESEGMENT_BY_SPEAKER.
+        if result.get("_asr_backend") == "qwen3" or RESEGMENT_BY_SPEAKER:
+            if result.get("_asr_backend") == "qwen3":
+                from app import qwen3_backend
+
+                result = qwen3_backend.resegment_by_speaker(result)
+            else:
+                result = resegment_by_speaker(result)
 
         # Re-split coarse segments along diarization turn boundaries when
         # no segment has word-level data (word_timestamps=false path).
@@ -938,7 +978,11 @@ def run_pipeline(
         hotwords=hotwords,
     )
 
-    if word_timestamps:
+    # The qwen3 backend produces one segment per ~90s chunk, so speaker
+    # assignment needs word-level timestamps even if the caller did not ask
+    # for them; the whisper backend keeps its original behaviour.
+    needs_align = word_timestamps or (should_diarize and result.get("_asr_backend") == "qwen3")
+    if needs_align:
         result = align(audio, result)
 
     speaker_embeddings = None
@@ -952,4 +996,14 @@ def run_pipeline(
             return_speaker_embeddings=return_speaker_embeddings,
         )
 
+    # The qwen3 backend aligns even when the caller did not ask for word
+    # timestamps (speaker assignment needs them); strip the word-level data
+    # from the response in that case, matching the whisper backend's shape.
+    if not word_timestamps and result.pop("_asr_backend", None) == "qwen3":
+        result.pop("word_segments", None)
+        for seg in result.get("segments", []):
+            seg.pop("words", None)
+
+    result.pop("_asr_backend", None)
+    result.pop("_language_name", None)
     return result, speaker_embeddings
