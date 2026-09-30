@@ -507,18 +507,23 @@ def transcribe(
               A warning is logged; no error is raised.
     initial_prompt: set per-request on the shared cached model (reset in finally).
     """
-    # Optional Qwen3-ASR backend (opt-in via ASR_BACKEND=qwen3).
-    if ASR_BACKEND == "qwen3":
+    # Optional alternative ASR backends (opt-in via ASR_BACKEND).
+    if ASR_BACKEND in ("qwen3", "external"):
         if task == "transcribe":
-            from app import qwen3_backend
+            if ASR_BACKEND == "qwen3":
+                from app import qwen3_backend as backend_mod
+            else:
+                from app import external_backend as backend_mod
 
             context = " ".join(p for p in (initial_prompt, hotwords) if p) or None
-            logger.info("Starting transcription (qwen3 backend)...")
-            result = qwen3_backend.transcribe(audio, language=language, context=context)
+            logger.info(f"Starting transcription ({ASR_BACKEND} backend)...")
+            result = backend_mod.transcribe(audio, language=language, context=context)
             logger.info(f"Transcription complete. Detected language: {result.get('language')}")
             clear_gpu_memory()
             return result
-        logger.warning("ASR_BACKEND=qwen3 does not support task=translate; using whisper backend for this request")
+        logger.warning(
+            f"ASR_BACKEND={ASR_BACKEND} does not support task=translate; using whisper backend for this request"
+        )
 
     whisper_model = load_whisper_model(model_name)
 
@@ -558,8 +563,9 @@ def transcribe(
 # ---------------------------------------------------------------------------
 def align(audio: np.ndarray, result: dict) -> dict:
     """Run alignment to get word-level timestamps (Wav2Vec2 via whispermlx,
-    or the Qwen3 forced aligner for results produced by the qwen3 backend)."""
-    if result.get("_asr_backend") == "qwen3":
+    the Qwen3 forced aligner for qwen3-backend results, or for external
+    results when the provider gave no segment timestamps)."""
+    if result.get("_asr_backend") == "qwen3" or result.get("_qwen_align"):
         from app import qwen3_backend
 
         logger.info("Aligning timestamps (qwen3 forced aligner)...")
@@ -648,17 +654,15 @@ def diarize(
 
         result = whispermlx.assign_word_speakers(diarize_segments, result, fill_nearest=DIARIZE_FILL_NEAREST)
 
-        # Rebuild segments at speaker-change boundaries. The qwen3 backend's
-        # pre-diarization segments come from silence gaps alone, so a segment
-        # can span several speakers' turns; always rebuilt for that backend.
-        # Opt-in for the whisper backend via RESEGMENT_BY_SPEAKER.
-        if result.get("_asr_backend") == "qwen3" or RESEGMENT_BY_SPEAKER:
-            if result.get("_asr_backend") == "qwen3":
-                from app import qwen3_backend
+        # qwen3 and text-only external segments are built from silence gaps
+        # or chunk spans alone, so a segment can span several speakers'
+        # turns. Now that words carry speaker labels, rebuild the segments
+        # so each one holds a single speaker's turn. Opt-in for the whisper
+        # backend via RESEGMENT_BY_SPEAKER.
+        if result.get("_asr_backend") == "qwen3" or result.get("_qwen_align") or RESEGMENT_BY_SPEAKER:
+            from app import qwen3_backend
 
-                result = qwen3_backend.resegment_by_speaker(result)
-            else:
-                result = resegment_by_speaker(result)
+            result = qwen3_backend.resegment_by_speaker(result)
 
         # Re-split coarse segments along diarization turn boundaries when
         # no segment has word-level data (word_timestamps=false path).
@@ -978,10 +982,12 @@ def run_pipeline(
         hotwords=hotwords,
     )
 
-    # The qwen3 backend produces one segment per ~90s chunk, so speaker
-    # assignment needs word-level timestamps even if the caller did not ask
-    # for them; the whisper backend keeps its original behaviour.
-    needs_align = word_timestamps or (should_diarize and result.get("_asr_backend") == "qwen3")
+    # The qwen3 backend and text-only external results produce coarse
+    # chunk-level segments, so speaker assignment needs word-level
+    # timestamps even if the caller did not ask for them; the whisper
+    # backend keeps its original behaviour.
+    internally_aligned = result.get("_asr_backend") == "qwen3" or result.get("_qwen_align")
+    needs_align = word_timestamps or (should_diarize and internally_aligned)
     if needs_align:
         result = align(audio, result)
 
@@ -996,14 +1002,16 @@ def run_pipeline(
             return_speaker_embeddings=return_speaker_embeddings,
         )
 
-    # The qwen3 backend aligns even when the caller did not ask for word
-    # timestamps (speaker assignment needs them); strip the word-level data
-    # from the response in that case, matching the whisper backend's shape.
-    if not word_timestamps and result.pop("_asr_backend", None) == "qwen3":
+    # Non-whisper backends may align even when the caller did not ask for
+    # word timestamps (speaker assignment needs them); strip the word-level
+    # data from the response in that case, matching the whisper backend's
+    # response shape.
+    if not word_timestamps and internally_aligned:
         result.pop("word_segments", None)
         for seg in result.get("segments", []):
             seg.pop("words", None)
 
     result.pop("_asr_backend", None)
     result.pop("_language_name", None)
+    result.pop("_qwen_align", None)
     return result, speaker_embeddings
