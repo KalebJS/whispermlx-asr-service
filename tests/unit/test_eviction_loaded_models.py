@@ -96,6 +96,10 @@ def _reset_pipeline(pipe_mod, keep_alive_seconds=1):
     pipe_mod.MODEL_KEEP_ALIVE_SECONDS = keep_alive_seconds
     pipe_mod._whisper_models.clear()
     pipe_mod._whisper_models_last_used.clear()
+    pipe_mod._align_models.clear()
+    pipe_mod._align_models_last_used.clear()
+    pipe_mod._diarize_pipeline = None
+    pipe_mod._diarize_last_used = None
     pipe_mod._eviction_thread_started = False
 
 
@@ -590,3 +594,94 @@ class TestTransparentReloadAfterEviction:
                 loaded = c.get("/health").json()["loaded_models"]
                 assert "tiny" not in loaded
                 assert "base" in loaded
+
+
+# ---------------------------------------------------------------------------
+# Idle eviction of alignment and diarization models
+# (ported from upstream 99d9a65; exercises the real _run_eviction_sweep)
+# ---------------------------------------------------------------------------
+
+
+class TestIdleAlignDiarizeEviction:
+    """
+    MODEL_KEEP_ALIVE_SECONDS also applies to the per-language alignment
+    models and the diarization pipeline: loading stamps a last-used
+    timestamp, the real sweep evicts them when idle past the window, and
+    recently-used entries are left alone.
+    """
+
+    @pytest.fixture()
+    def pipe_with_keepalive(self):
+        wmlx = _make_whispermlx_mock()
+        with (
+            patch("app.pipeline.whispermlx", wmlx),
+            patch.dict(os.environ, {"MODEL_KEEP_ALIVE_SECONDS": "1"}, clear=False),
+        ):
+            import app.pipeline as pipe_mod
+
+            _reset_pipeline(pipe_mod, keep_alive_seconds=1)
+            yield pipe_mod
+            # Ensure the eviction thread does not leak across tests
+            pipe_mod._eviction_thread_started = False
+
+    def test_load_align_model_stamps_last_used(self, pipe_with_keepalive):
+        """Loading an alignment model records a last-used timestamp."""
+        m = pipe_with_keepalive
+        m.load_align_model("en")
+        assert "en" in m._align_models
+        assert "en" in m._align_models_last_used
+        assert m._align_models_last_used["en"] > 0
+
+    def test_idle_alignment_model_evicted(self, pipe_with_keepalive):
+        """An alignment model idle past the window is evicted by the real sweep."""
+        m = pipe_with_keepalive
+        m.load_align_model("en")
+        m._align_models_last_used["en"] = time.time() - 100
+
+        evicted = m._run_eviction_sweep()
+
+        assert evicted is True
+        assert "en" not in m._align_models
+        assert "en" not in m._align_models_last_used
+
+    def test_recent_alignment_model_stays(self, pipe_with_keepalive):
+        """A recently-used alignment model survives the sweep."""
+        m = pipe_with_keepalive
+        m.load_align_model("en")
+        # last_used is "now"; do not rewind it
+
+        m._run_eviction_sweep()
+
+        assert "en" in m._align_models
+
+    def test_load_diarize_pipeline_stamps_last_used(self, pipe_with_keepalive):
+        """Loading the diarization pipeline records a last-used timestamp."""
+        with patch.object(pipe_with_keepalive, "DiarizationPipeline", MagicMock()):
+            pipeline = pipe_with_keepalive.load_diarize_pipeline()
+        assert pipeline is not None
+        assert pipe_with_keepalive._diarize_last_used is not None
+        assert pipe_with_keepalive._diarize_last_used > 0
+
+    def test_idle_diarize_pipeline_evicted(self, pipe_with_keepalive):
+        """The diarization pipeline idle past the window is evicted by the real sweep."""
+        m = pipe_with_keepalive
+        with patch.object(m, "DiarizationPipeline", MagicMock()):
+            m.load_diarize_pipeline()
+        m._diarize_last_used = time.time() - 100
+
+        evicted = m._run_eviction_sweep()
+
+        assert evicted is True
+        assert m._diarize_pipeline is None
+        assert m._diarize_last_used is None
+
+    def test_recent_diarize_pipeline_stays(self, pipe_with_keepalive):
+        """A recently-used diarization pipeline survives the sweep."""
+        m = pipe_with_keepalive
+        with patch.object(m, "DiarizationPipeline", MagicMock()):
+            m.load_diarize_pipeline()
+        # _diarize_last_used is "now"; do not rewind it
+
+        m._run_eviction_sweep()
+
+        assert m._diarize_pipeline is not None

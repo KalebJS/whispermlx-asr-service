@@ -47,9 +47,10 @@ with contextlib.suppress(OSError):
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
 DEFAULT_MODEL = os.getenv("PRELOAD_MODEL", "large-v3")
 
-# Idle model eviction. Set MODEL_KEEP_ALIVE_SECONDS > 0 to unload Whisper
-# models that have not been used in that many seconds. Floor of 30s on the
-# sweep interval to avoid pegging a thread on tight loops.
+# Idle model eviction. Set MODEL_KEEP_ALIVE_SECONDS > 0 to unload Whisper,
+# alignment and diarization models that have not been used in that many
+# seconds. Floor of 30s on the sweep interval to avoid pegging a thread on
+# tight loops.
 MODEL_KEEP_ALIVE_SECONDS = int(os.getenv("MODEL_KEEP_ALIVE_SECONDS", "0"))
 MODEL_EVICTION_INTERVAL_SECONDS = max(30, int(os.getenv("MODEL_EVICTION_INTERVAL_SECONDS", "60")))
 
@@ -129,7 +130,9 @@ _model_load_lock = threading.Lock()
 _whisper_models: dict[str, Any] = {}
 _whisper_models_last_used: dict[str, float] = {}
 _align_models: dict[str, tuple[Any, Any]] = {}
+_align_models_last_used: dict[str, float] = {}
 _diarize_pipeline: DiarizationPipeline | None = None
+_diarize_last_used: float | None = None
 
 _eviction_thread_lock = threading.Lock()
 _eviction_thread_started = False
@@ -204,15 +207,17 @@ def _ensure_eviction_thread():
 
 
 def _run_eviction_sweep() -> bool:
-    """Run a single eviction sweep over the cached Whisper models.
+    """Run a single eviction sweep over the cached models.
 
-    Evicts any model whose last-used timestamp is older than
+    Evicts any Whisper model, per-language alignment model, or the
+    diarization pipeline whose last-used timestamp is older than
     ``MODEL_KEEP_ALIVE_SECONDS``.  Returns ``True`` if at least one model
     was evicted (so the caller can decide whether to clear GPU memory).
 
     This is extracted from ``_eviction_loop`` so unit tests can exercise
     the real eviction code path without duplicating the sweep logic.
     """
+    global _diarize_pipeline, _diarize_last_used
     if MODEL_KEEP_ALIVE_SECONDS <= 0:
         return False
     now = time.time()
@@ -236,6 +241,35 @@ def _run_eviction_sweep() -> bool:
                     prom_metrics.MODEL_EVICTIONS_TOTAL.labels(model=name).inc()
                 except Exception:
                     pass
+
+    # Sweep idle alignment models (per-language cache).
+    align_candidates = [
+        lang
+        for lang, last in list(_align_models_last_used.items())
+        if now - last > MODEL_KEEP_ALIVE_SECONDS and lang in _align_models
+    ]
+    for lang in align_candidates:
+        with _model_load_lock:
+            last = _align_models_last_used.get(lang, 0)
+            if lang in _align_models and now - last > MODEL_KEEP_ALIVE_SECONDS:
+                logger.info(f"Evicting idle alignment model for language {lang}")
+                del _align_models[lang]
+                _align_models_last_used.pop(lang, None)
+                evicted_any = True
+
+    # Sweep idle diarization pipeline (singleton).
+    if _diarize_last_used is not None and now - _diarize_last_used > MODEL_KEEP_ALIVE_SECONDS:
+        with _model_load_lock:
+            if (
+                _diarize_last_used is not None
+                and now - _diarize_last_used > MODEL_KEEP_ALIVE_SECONDS
+                and _diarize_pipeline is not None
+            ):
+                logger.info("Evicting idle diarization pipeline")
+                _diarize_pipeline = None
+                _diarize_last_used = None
+                evicted_any = True
+
     if evicted_any:
         clear_gpu_memory()
     return evicted_any
@@ -260,12 +294,15 @@ def load_align_model(language_code: str):
                 )
                 _align_models[language_code] = (model_a, metadata)
                 logger.info(f"Alignment model for {language_code} loaded")
+    with _model_load_lock:
+        _align_models_last_used[language_code] = time.time()
+    _ensure_eviction_thread()
     return _align_models[language_code]
 
 
 def load_diarize_pipeline() -> DiarizationPipeline:
     """Load diarization pipeline (singleton, thread-safe)."""
-    global _diarize_pipeline
+    global _diarize_pipeline, _diarize_last_used
     if _diarize_pipeline is None:
         with _model_load_lock:
             if _diarize_pipeline is None:
@@ -276,6 +313,9 @@ def load_diarize_pipeline() -> DiarizationPipeline:
                     device=DEVICE,
                 )
                 logger.info("Diarization pipeline loaded")
+    with _model_load_lock:
+        _diarize_last_used = time.time()
+    _ensure_eviction_thread()
     return _diarize_pipeline
 
 
@@ -346,6 +386,8 @@ def align(audio: np.ndarray, result: dict) -> dict:
             DEVICE,
             return_char_alignments=False,
         )
+        with _model_load_lock:
+            _align_models_last_used[detected_language] = time.time()
         logger.info("Timestamp alignment complete")
         clear_gpu_memory()
     except Exception as e:
@@ -369,6 +411,8 @@ def diarize(
 
     Returns (result_with_speakers, speaker_embeddings_or_None).
     """
+    global _diarize_last_used
+
     if not HF_TOKEN:
         logger.warning("Speaker diarization requested but HF_TOKEN not set")
         return result, None
@@ -413,6 +457,8 @@ def diarize(
         # audio to a single dominant speaker on a coarse segment.
         result = _resplit_segments_on_diarization_turns(result, diarize_segments)
 
+        with _model_load_lock:
+            _diarize_last_used = time.time()
         logger.info("Speaker diarization complete")
         clear_gpu_memory()
     except Exception as e:
