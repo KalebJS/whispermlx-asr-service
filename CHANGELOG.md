@@ -72,6 +72,29 @@
 - Speaker diarization support
 - Docker deployment
 
+## v0.6.0 (2026-09-30)
+
+### Feat
+
+- run the Qwen3 backend natively in MLX on Apple Silicon
+- add EXTERNAL_ASR_ALIGNER to force the Qwen aligner
+- add external ASR backend (ASR_BACKEND=external)
+- add experimental Qwen3-ASR backend (ASR_BACKEND=qwen3)
+- add RESEGMENT_BY_SPEAKER opt-in speaker-turn resegmentation
+- add diarization hyperparameter tuning and a parameter sweep tool
+- add ALIGN_DEVICE to run alignment off the GPU
+- extend idle model eviction to align and diarize models
+
+### Fix
+
+- keep app/version.py in sync with the package version
+- pin app logger to INFO under uvicorn's logging config
+- expand tilde in CACHE_DIR so env-provided paths resolve
+
+### Refactor
+
+- extract _evict_from_cache helper to dedupe the idle sweep
+
 ## v0.5.1 (2026-06-23)
 
 ### Fix
