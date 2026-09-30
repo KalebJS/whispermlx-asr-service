@@ -360,7 +360,9 @@ class TestExternalRouting:
             patch.object(pipeline, "align", return_value=aligned),
             patch.object(pipeline, "diarize", return_value=(aligned, None)),
         ):
-            result, _ = pipeline.run_pipeline(np.zeros(1600, dtype=np.float32), word_timestamps=True, should_diarize=True)
+            result, _ = pipeline.run_pipeline(
+                np.zeros(1600, dtype=np.float32), word_timestamps=True, should_diarize=True
+            )
         assert result.get("_qwen_align") is None
         assert result.get("_asr_backend") is None
         assert result.get("_language_name") is None

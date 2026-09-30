@@ -168,9 +168,7 @@ class TestResegmentBySpeaker:
 
     def test_words_without_timestamps_return_unchanged(self):
         result = {
-            "segments": [
-                {"start": 0.0, "end": 1.0, "text": "hello", "words": [{"word": "hello", "speaker": "S0"}]}
-            ]
+            "segments": [{"start": 0.0, "end": 1.0, "text": "hello", "words": [{"word": "hello", "speaker": "S0"}]}]
         }
         out = resegment_by_speaker(result)
         assert out["segments"][0]["start"] == 0.0

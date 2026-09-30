@@ -60,6 +60,7 @@ DEFAULT_MODEL = os.getenv("PRELOAD_MODEL", "large-v3")
 MODEL_KEEP_ALIVE_SECONDS = int(os.getenv("MODEL_KEEP_ALIVE_SECONDS", "0"))
 MODEL_EVICTION_INTERVAL_SECONDS = max(30, int(os.getenv("MODEL_EVICTION_INTERVAL_SECONDS", "60")))
 
+
 # Diarization hyperparameter tuning (pyannote community-1).
 # All unset by default -> the pipeline runs with the model's published defaults,
 # so behaviour is unchanged unless you opt in.
@@ -329,9 +330,7 @@ def _run_eviction_sweep() -> bool:
     now = time.time()
 
     evicted_any = _evict_from_cache(_whisper_models, _whisper_models_last_used, "model", now, with_metrics=True)
-    evicted_any |= _evict_from_cache(
-        _align_models, _align_models_last_used, "alignment model for language", now
-    )
+    evicted_any |= _evict_from_cache(_align_models, _align_models_last_used, "alignment model for language", now)
 
     # Sweep idle diarization pipeline (singleton).
     if _diarize_last_used is not None and now - _diarize_last_used > MODEL_KEEP_ALIVE_SECONDS:
@@ -838,9 +837,7 @@ def _join_words(words: list[dict]) -> str:
     return out
 
 
-def _words_to_segments(
-    words: list[dict], max_gap: float = 1.0, max_len: float = 30.0
-) -> list[dict]:
+def _words_to_segments(words: list[dict], max_gap: float = 1.0, max_len: float = 30.0) -> list[dict]:
     """Group aligned words into segments, splitting on speaker changes
     (when words carry a speaker label), silence gaps, sentence-ending
     punctuation, or excessive segment length."""
@@ -858,11 +855,7 @@ def _words_to_segments(
             gap = w["start"] - last_timed["end"]
             duration = w["end"] - first_timed["start"]
             ended = current[-1]["word"].rstrip()[-1:] in ".。!?！？"
-            turn = (
-                speaker is not None
-                and current_speaker is not None
-                and speaker != current_speaker
-            )
+            turn = speaker is not None and current_speaker is not None and speaker != current_speaker
             if turn or gap > max_gap or duration > max_len or (ended and gap > 0.2):
                 segments.append(current)
                 current = []
