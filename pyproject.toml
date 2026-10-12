@@ -18,7 +18,9 @@ classifiers = [
     "Topic :: Multimedia :: Sound/Audio :: Speech",
 ]
 dependencies = [
-    "whispermlx",
+    # >=3.13.1 includes the periodic mx.clear_cache() in the VAD-segment loop;
+    # 3.12.x lets MLX's buffer cache grow without bound across transcriptions.
+    "whispermlx>=3.13.1",
     "fastapi",
     "uvicorn[standard]",
     "python-multipart",

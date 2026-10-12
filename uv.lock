@@ -2372,7 +2372,7 @@ wheels = [
 
 [[package]]
 name = "whispermlx"
-version = "3.13.1"
+version = "3.14.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "huggingface-hub" },
@@ -2389,9 +2389,9 @@ dependencies = [
     { name = "tqdm" },
     { name = "transformers" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ff/3a/e48367723e1c8167efff13a548c33ca883703a74fb5952b755c068eb5637/whispermlx-3.13.1.tar.gz", hash = "sha256:86c76650d2c068fd9ae18acf668e0772ad0f52db529cb42ffa908093f59ae669", size = 16497644, upload-time = "2026-08-07T14:01:36.184Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/01/a3/4c0e6b304a7ca0b6fec415111ed913be054b5937a473e6019998a4b62d08/whispermlx-3.14.0.tar.gz", hash = "sha256:7b0b6a8ad914a9d27e9b46c71c87f83e271d4a33d870a62a5ab4c4a4738d8c62", size = 16503867, upload-time = "2026-09-30T15:00:31.365Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/27/ba/8c9a4dbd4b431d460e87f030c21c6484496e411c870dd84b74d7590deb6d/whispermlx-3.13.1-py3-none-any.whl", hash = "sha256:4ecad0d1f2a057c2c1c82dc3ebaefcd10ee81dba51f8b288f660258d18bf84ed", size = 16487090, upload-time = "2026-08-07T14:01:32.809Z" },
+    { url = "https://files.pythonhosted.org/packages/32/87/e0ebecd4891be90f5eb0df98826652e537e6607e0fd6fdf56994c554ae90/whispermlx-3.14.0-py3-none-any.whl", hash = "sha256:c68551d990b04cd32ec615eba59982a0f7e998102111ff45836a4efef02d0e2d", size = 16489373, upload-time = "2026-09-30T15:00:28.57Z" },
 ]
 
 [[package]]
@@ -2429,7 +2429,7 @@ requires-dist = [
     { name = "python-multipart" },
     { name = "transformers", specifier = ">=5.13,<6" },
     { name = "uvicorn", extras = ["standard"] },
-    { name = "whispermlx" },
+    { name = "whispermlx", specifier = ">=3.13.1" },
 ]
 
 [package.metadata.requires-dev]

@@ -45,11 +45,17 @@ VRAM_ALLOCATED_BYTES = Gauge(
     "whisperx_vram_allocated_bytes",
     "Currently allocated GPU memory via MLX active memory (or 0 on CPU)",
 )
+VRAM_CACHE_BYTES = Gauge(
+    "whisperx_vram_cache_bytes",
+    "MLX buffer-cache memory held by the allocator (or 0 on CPU). Sits on "
+    "top of active memory; unbounded growth here indicates stuck MLX "
+    "versions lacking the periodic clear_cache() (whispermlx < 3.13.1).",
+)
 SERVICE_INFO = Info("whisperx_service", "Static service identity")
 
 
 def refresh_vram():
-    """Report MLX active memory (or 0) instead of CUDA VRAM."""
+    """Report MLX active and cache memory (or 0) instead of CUDA VRAM."""
     try:
         import mlx.core
 
@@ -57,8 +63,13 @@ def refresh_vram():
             VRAM_ALLOCATED_BYTES.set(mlx.core.get_active_memory())
         else:
             VRAM_ALLOCATED_BYTES.set(0)
+        if hasattr(mlx.core, "get_cache_memory"):
+            VRAM_CACHE_BYTES.set(mlx.core.get_cache_memory())
+        else:
+            VRAM_CACHE_BYTES.set(0)
     except Exception:
         VRAM_ALLOCATED_BYTES.set(0)
+        VRAM_CACHE_BYTES.set(0)
 
 
 def render():
