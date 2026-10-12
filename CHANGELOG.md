@@ -72,6 +72,12 @@
 - Speaker diarization support
 - Docker deployment
 
+## v0.6.1 (2026-10-12)
+
+### Fix
+
+- **deps**: floor whispermlx at 3.13.1 to bound MLX cache
+
 ## v0.6.0 (2026-09-30)
 
 ### Feat
